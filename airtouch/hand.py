@@ -10,7 +10,7 @@ Landmark indices:
 """
 
 from dataclasses import dataclass
-from math import hypot
+from math import atan2, hypot
 
 WRIST = 0
 THUMB_IP, THUMB_TIP = 3, 4
@@ -60,6 +60,20 @@ class HandFeatures:
         if name == "wrist":
             return pts[WRIST]
         raise KeyError(name)
+
+    @property
+    def pointing_angle(self) -> float:
+        """Direction the index and middle fingers point at, in radians.
+
+        Measured from the wrist to the midpoint of the two fingertips: a long
+        lever, so the landmark jitter barely moves it. y grows downwards, so a
+        growing angle is a clockwise rotation as seen in the preview window.
+        """
+        pts = self.points
+        tip_x = (pts[INDEX_TIP][0] + pts[MIDDLE_TIP][0]) / 2.0
+        tip_y = (pts[INDEX_TIP][1] + pts[MIDDLE_TIP][1]) / 2.0
+        wrist = pts[WRIST]
+        return atan2(tip_y - wrist[1], tip_x - wrist[0])
 
     @property
     def extended_count(self) -> int:

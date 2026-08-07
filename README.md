@@ -43,6 +43,8 @@ python -m venv .venv
 | **Fist** closed and still for 5 s | `fist_hold` | Play / Pause |
 | **Index + middle** open, hand up/down | `two_finger_vertical` | Scroll, like the wheel |
 | **Index + middle** open, hand right/left | `two_finger_horizontal` | Volume up / down |
+| **Index + middle** open, hand turned clockwise | `two_finger_rotate_cw` | Volume up |
+| **Index + middle** open, hand turned anticlockwise | `two_finger_rotate_ccw` | Volume down |
 
 Practical notes:
 
@@ -53,7 +55,17 @@ Practical notes:
   thumb brings the middle finger close too, and without the comparison the wrong
   click would fire). The genuinely tightest pinch always wins.
 - With index and middle finger open the **axis locks** on the first decisive
-  travel: a diagonal movement will not fire scroll and volume together.
+  movement: a diagonal movement will not fire scroll and volume together, and
+  the same lock keeps sliding and turning apart. Lower the fingers to release
+  it and pick another direction.
+- The rotation is measured on the direction of the two fingers, from the wrist:
+  turn the hand like a key, pivoting on the wrist. Every 20 degrees fires one
+  event, so it works as a **volume knob**: keep turning and the volume keeps
+  going. The sliding, meanwhile, is judged on the wrist, which stays put while
+  you only turn.
+- Volume has two controls, on purpose: sliding sideways is quick, turning the
+  hand is finer and does not need room to move. Bind `two_finger_horizontal` to
+  something else (or to `"none"`) if you would rather have that axis free.
 - After a swipe there is a 0.8 s pause, so `Alt+Tab` does not machine-gun.
 - The `FIST STILL` bar in the preview shows the progress towards the 5 seconds.
 
@@ -105,7 +117,9 @@ comments (local extension: plain JSON does not have them).
     "fist_swipe_up": "alt+tab",
     "fist_hold": "play_pause",
     "two_finger_vertical":   { "action": "scroll", "gain": 55 },
-    "two_finger_horizontal": { "action": "volume", "gain": 14 }
+    "two_finger_horizontal": { "action": "volume", "gain": 14 },
+    "two_finger_rotate_cw":  "volume_up",
+    "two_finger_rotate_ccw": "volume_down"
   }
 }
 ```
@@ -248,6 +262,11 @@ overridden from the `settings` section of the JSON:
 - `fist_still_travel` / `fist_hold_seconds` - how still, and for how long.
 - `axis_lock_travel` / `axis_deadzone` - when the two-finger axis is decided and
   below which movement it is ignored.
+- `rotate_min_angle` / `rotate_window` / `rotate_cooldown` - degrees of turn that
+  fire one rotation event, over how long a window they have to be made, and the
+  pause afterwards. Together they set how fast the volume climbs: 20 degrees
+  every 0.15 s at most. Raise `rotate_min_angle` if a rotation slips out while
+  you are scrolling, lower it for a lighter turn of the wrist.
 - `active_x_*` / `active_y_*` - the portion of the frame used as a tablet.
 - `min_cutoff` / `beta` - One Euro filter: low `min_cutoff` = smoother, high
   `beta` = less latency on fast movements.

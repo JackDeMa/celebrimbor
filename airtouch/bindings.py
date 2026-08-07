@@ -44,7 +44,11 @@ DEFAULT_TEXT = """{
 
     // --- index and middle finger open, hand sliding ---
     "two_finger_vertical": { "action": "scroll", "gain": 55 },
-    "two_finger_horizontal": { "action": "volume", "gain": 14 }
+    "two_finger_horizontal": { "action": "volume", "gain": 14 },
+
+    // --- index and middle finger open, hand turned like a key ---
+    "two_finger_rotate_cw": "volume_up",
+    "two_finger_rotate_ccw": "volume_down"
   }
 }
 """

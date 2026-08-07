@@ -12,10 +12,11 @@ Event kinds:
 
 from collections import deque
 from dataclasses import dataclass, field
+from math import pi, radians
 
 from .config import Config
 from .filters import PointFilter
-from .hand import PINCH_FINGERS, HandFeatures, Hysteresis
+from .hand import PINCH_FINGERS, WRIST, HandFeatures, Hysteresis
 
 # Gesture -> kind of event it produces. Also used to validate the JSON.
 GESTURE_KINDS: dict[str, str] = {
@@ -33,6 +34,8 @@ GESTURE_KINDS: dict[str, str] = {
     "fist_hold": "trigger",
     "two_finger_vertical": "axis",
     "two_finger_horizontal": "axis",
+    "two_finger_rotate_cw": "trigger",
+    "two_finger_rotate_ccw": "trigger",
 }
 
 
@@ -145,6 +148,10 @@ class GestureRecognizer:
         self._two_origin: tuple[float, float] | None = None
         self._two_last: tuple[float, float] | None = None
         self._two_axis: str | None = None
+        self._rot_track: deque[tuple[float, float]] = deque()  # (t, turn so far)
+        self._rot_total = 0.0
+        self._rot_prev: float | None = None
+        self._rot_block_until = 0.0
 
         self._missing = 0
 
@@ -156,9 +163,7 @@ class GestureRecognizer:
         self._fist_track.clear()
         self._fist_still_since = None
         self._fist_hold_done = False
-        self._two_origin = None
-        self._two_last = None
-        self._two_axis = None
+        self._end_two_finger()
         for detector in self._closing.values():
             detector.reset()
         self._was_anchored = False
@@ -187,11 +192,11 @@ class GestureRecognizer:
         if self._is_two_finger(feats):
             self._forget_reference()
             events = self._release_pinches()
-            events += self._two_finger(feats)
+            events += self._two_finger(feats, t)
             return Recognition(
                 events=events,
                 mode="TWO FINGERS",
-                detail=self._two_axis or "pick a direction",
+                detail=self._two_axis or "slide or turn the hand",
             )
         self._end_two_finger()
 
@@ -356,24 +361,37 @@ class GestureRecognizer:
             and not feats.pinky_extended
         )
 
-    def _two_finger(self, feats: HandFeatures) -> list[GestureEvent]:
+    def _two_finger(self, feats: HandFeatures, t: float) -> list[GestureEvent]:
         point = feats.palm_point
+        wrist = feats.points[WRIST]
+        turn = self._track_rotation(feats.pointing_angle, t)
         if self._two_last is None:
-            self._two_origin = point
+            self._two_origin = wrist
             self._two_last = point
             self._two_axis = None
             return []
 
         if self._two_axis is None:
-            # The axis is chosen once only, on the first decisive travel:
+            # The axis is chosen once only, on the first decisive movement:
             # without this lock a diagonal movement would fire scroll and
-            # volume at the same time.
-            dx = point[0] - self._two_origin[0]
-            dy = point[1] - self._two_origin[1]
-            if max(abs(dx), abs(dy)) < self.cfg.axis_lock_travel:
+            # volume at the same time, and turning the hand would drag them
+            # along as well.
+            #
+            # The travel is measured at the wrist and not at the palm: the wrist
+            # stays put while the hand only turns, so a rotation does not eat
+            # the lock before it has been recognised.
+            dx = wrist[0] - self._two_origin[0]
+            dy = wrist[1] - self._two_origin[1]
+            if abs(turn) >= radians(self.cfg.rotate_min_angle):
+                self._two_axis = "rotation"
+            elif max(abs(dx), abs(dy)) >= self.cfg.axis_lock_travel:
+                self._two_axis = "horizontal" if abs(dx) > abs(dy) else "vertical"
+            else:
                 self._two_last = point
                 return []
-            self._two_axis = "horizontal" if abs(dx) > abs(dy) else "vertical"
+
+        if self._two_axis == "rotation":
+            return self._rotation(turn, t)
 
         events = []
         if self._two_axis == "vertical":
@@ -388,10 +406,46 @@ class GestureRecognizer:
             events.append(GestureEvent(name, "axis", delta))
         return events
 
+    def _track_rotation(self, angle: float, t: float) -> float:
+        """Signed turn accumulated over the last `rotate_window` seconds.
+
+        atan2 jumps by a whole turn when the fingers cross the far side, so the
+        per-frame differences are unwrapped before being summed. Only the window
+        is kept: over a longer span the slow drift of a hand held up would add
+        up to a rotation nobody made.
+        """
+        if self._rot_prev is not None:
+            step = angle - self._rot_prev
+            self._rot_total += (step + pi) % (2 * pi) - pi  # shortest way round
+        self._rot_prev = angle
+
+        self._rot_track.append((t, self._rot_total))
+        while (
+            len(self._rot_track) > 1
+            and t - self._rot_track[0][0] > self.cfg.rotate_window
+        ):
+            self._rot_track.popleft()
+        return self._rot_total - self._rot_track[0][1]
+
+    def _rotation(self, turn: float, t: float) -> list[GestureEvent]:
+        """One event per `rotate_min_angle` of turn, keeping on while turning."""
+        if t < self._rot_block_until or abs(turn) < radians(self.cfg.rotate_min_angle):
+            return []
+        # y grows downwards and the image is mirrored, so a growing angle is the
+        # clockwise turn the user sees in front of them.
+        name = "two_finger_rotate_cw" if turn > 0 else "two_finger_rotate_ccw"
+        self._rot_track.clear()
+        self._rot_track.append((t, self._rot_total))
+        self._rot_block_until = t + self.cfg.rotate_cooldown
+        return [GestureEvent(name, "trigger")]
+
     def _end_two_finger(self) -> None:
         self._two_origin = None
         self._two_last = None
         self._two_axis = None
+        self._rot_track.clear()
+        self._rot_total = 0.0
+        self._rot_prev = None
 
     # --- pinch --------------------------------------------------------------
     def _pinches(self, feats: HandFeatures, t: float) -> list[GestureEvent]:

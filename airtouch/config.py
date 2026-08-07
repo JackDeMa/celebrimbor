@@ -71,6 +71,17 @@ class Config:
     axis_lock_travel: float = 0.025   # travel before the axis is picked
     axis_deadzone: float = 0.004      # per-frame movement below which we ignore
 
+    # --- two-finger rotation (same pose, hand turned like a key) ---
+    # The rotation competes with the sliding for the axis lock: whichever
+    # crosses its own threshold first wins, and the other one stays quiet until
+    # the fingers are lowered.
+    # The angle is small and the pause short because the default binding is the
+    # volume: one step every 20 degrees turns the hand into a usable knob,
+    # whereas a wide angle would need half a turn per notch.
+    rotate_window: float = 0.6        # time window over which the turn is measured
+    rotate_min_angle: float = 20.0    # degrees of turn needed to fire
+    rotate_cooldown: float = 0.15     # pause after a recognised rotation
+
     # --- misc ---
     show_preview: bool = True
     dry_run: bool = False  # recognises gestures but never touches the real mouse

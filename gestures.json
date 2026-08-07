@@ -24,13 +24,20 @@
     "fist_swipe_left": "ctrl+win+left",
     "fist_swipe_right": "ctrl+win+right",
     "fist_swipe_up": "alt+tab",
-    "fist_swipe_down": "alt+shift+tab",
+    "fist_swipe_down": "win+d",
 
     // --- fist closed and still for 5 seconds ---
     "fist_hold": "play_pause",
 
     // --- index and middle finger open, hand sliding ---
     "two_finger_vertical": { "action": "scroll", "gain": 55 },
-    "two_finger_horizontal": { "action": "volume", "gain": 14 }
+    "two_finger_horizontal": { "action": "volume", "gain": 14 },
+
+    // --- index and middle finger open, hand turned like a key ---
+    // Volume knob: one step every 20 degrees of turn. Sliding and turning are
+    // mutually exclusive, the first of the two to pass its threshold wins until
+    // you lower the fingers.
+    "two_finger_rotate_cw": "volume_up",
+    "two_finger_rotate_ccw": "volume_down"
   }
 }
