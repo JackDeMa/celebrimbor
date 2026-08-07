@@ -1,11 +1,11 @@
-"""Azioni collegabili ai gesti: click, scroll, tasti, combinazioni, volume.
+"""Actions bindable to gestures: clicks, scroll, keys, combos, volume.
 
-Ogni azione dichiara i "kind" di gesto che sa gestire:
+Every action declares the gesture "kinds" it can handle:
 
-    trigger  evento istantaneo (uno swipe, un tap)
-    axis     movimento continuo, riceve un delta a ogni frame
-    hold     stato acceso/spento (il pinch tenuto -> drag)
-    cursor   posizione normalizzata sullo schermo
+    trigger  instantaneous event (a swipe, a tap)
+    axis     continuous movement, receives a delta on every frame
+    hold     on/off state (a held pinch -> drag)
+    cursor   normalised position on the screen
 """
 
 from pynput.keyboard import Controller as KeyboardController
@@ -14,7 +14,7 @@ from pynput.keyboard import Key, KeyCode
 from .controller import MouseActuator
 
 # ---------------------------------------------------------------------------
-# Tastiera
+# Keyboard
 # ---------------------------------------------------------------------------
 
 _MODIFIERS = {
@@ -63,16 +63,16 @@ class UnknownKeyError(ValueError):
 def parse_combo(combo: str) -> tuple[list, object]:
     """"ctrl+win+left" -> ([Key.ctrl, Key.cmd], Key.left).
 
-    L'ultimo elemento e' il tasto da battere, gli altri restano premuti attorno.
+    The last element is the key to tap, the others are held down around it.
     """
     parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
     if not parts:
-        raise UnknownKeyError(f"combinazione vuota: {combo!r}")
+        raise UnknownKeyError(f"empty combination: {combo!r}")
 
     mods = []
     for p in parts[:-1]:
         if p not in _MODIFIERS:
-            raise UnknownKeyError(f"modificatore sconosciuto: {p!r} in {combo!r}")
+            raise UnknownKeyError(f"unknown modifier: {p!r} in {combo!r}")
         mods.append(_MODIFIERS[p])
 
     last = parts[-1]
@@ -83,7 +83,7 @@ def parse_combo(combo: str) -> tuple[list, object]:
     elif len(last) == 1:
         key = KeyCode.from_char(last)
     else:
-        raise UnknownKeyError(f"tasto sconosciuto: {last!r} in {combo!r}")
+        raise UnknownKeyError(f"unknown key: {last!r} in {combo!r}")
     return mods, key
 
 
@@ -106,18 +106,18 @@ class KeyPresser:
 
 
 class Backend:
-    """Cio' su cui le azioni agiscono davvero."""
+    """What the actions actually act upon."""
 
     def __init__(self, mouse: MouseActuator, dry_run: bool = False):
         self.mouse = mouse
         self.keys = KeyPresser(dry_run)
-        # Tempo logico del frame corrente, aggiornato dall'engine: le azioni a
-        # ripetizione lo usano per limitare la cadenza senza leggere l'orologio.
+        # Logical time of the current frame, updated by the engine: repeating
+        # actions use it to cap their rate without reading the clock.
         self.now = 0.0
 
 
 # ---------------------------------------------------------------------------
-# Azioni
+# Actions
 # ---------------------------------------------------------------------------
 
 
@@ -148,7 +148,7 @@ class NoAction(Action):
 
 class MoveCursor(Action):
     kinds = ("cursor",)
-    label = "cursore"
+    label = "cursor"
 
     def cursor(self, backend: Backend, x: float, y: float) -> None:
         backend.mouse.move_to(x, y)
@@ -162,7 +162,7 @@ class Click(Action):
 
         self.button = {"left": Button.left, "right": Button.right, "middle": Button.middle}[button]
         self.count = count
-        self.label = f"click {button}" + (f" x{count}" if count > 1 else "")
+        self.label = f"{button} click" + (f" x{count}" if count > 1 else "")
 
     def trigger(self, backend: Backend) -> str | None:
         fired = False
@@ -187,7 +187,7 @@ class Drag(Action):
 
 
 class Scroll(Action):
-    """Rotella vera: accumula il delta e manda tacche intere."""
+    """A real wheel: accumulates the delta and sends whole notches."""
 
     kinds = ("axis",)
 
@@ -195,7 +195,7 @@ class Scroll(Action):
         self.gain = gain
         self.sign = -1.0 if invert else 1.0
         self.horizontal = horizontal
-        self.label = f"scroll {'orizzontale' if horizontal else 'verticale'}"
+        self.label = f"{'horizontal' if horizontal else 'vertical'} scroll"
 
     def axis(self, backend: Backend, delta: float) -> None:
         amount = delta * self.gain * self.sign
@@ -222,9 +222,9 @@ class Hotkey(Action):
 
 
 class RepeatAxis(Action):
-    """Trasforma un movimento continuo in pressioni ripetute di tasti.
+    """Turns a continuous movement into repeated key presses.
 
-    Serve per il volume: la manopola non esiste, esiste solo "un gradino su".
+    Needed for volume: there is no knob, only "one step up".
     """
 
     kinds = ("axis",)
@@ -235,7 +235,7 @@ class RepeatAxis(Action):
         negative: Action,
         gain: float = 14.0,
         max_rate: float = 25.0,
-        label: str = "asse",
+        label: str = "axis",
     ):
         self.positive = positive
         self.negative = negative
@@ -254,7 +254,7 @@ class RepeatAxis(Action):
             return None
         self._last = backend.now
 
-        # Un gradino per frame: evita raffiche ingestibili su movimenti bruschi.
+        # One step per frame: avoids unmanageable bursts on abrupt movements.
         step = 1 if steps > 0 else -1
         self._accum -= step
         return (self.positive if step > 0 else self.negative).trigger(backend)

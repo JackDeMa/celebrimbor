@@ -1,4 +1,4 @@
-"""Attuazione sul sistema operativo: spostamento cursore, click, drag, scroll."""
+"""Acting on the operating system: cursor movement, clicks, drag, scroll."""
 
 import sys
 import time
@@ -7,13 +7,13 @@ from pynput.mouse import Button, Controller
 
 
 def get_screen_size() -> tuple[int, int]:
-    """Dimensione dello schermo in pixel reali (DPI-aware su Windows)."""
+    """Screen size in real pixels (DPI-aware on Windows)."""
     if sys.platform == "win32":
         import ctypes
 
         try:
-            # PROCESS_PER_MONITOR_DPI_AWARE: evita coordinate scalate con display
-            # al 125%/150%, altrimenti il cursore non raggiunge i bordi.
+            # PROCESS_PER_MONITOR_DPI_AWARE: avoids scaled coordinates on
+            # displays at 125%/150%, otherwise the cursor cannot reach the edges.
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
             try:
@@ -33,19 +33,19 @@ def get_screen_size() -> tuple[int, int]:
 
 
 class MouseActuator:
-    """Wrapper sopra pynput con protezioni: cooldown sui click e drag coerente."""
+    """Wrapper over pynput with safeguards: click cooldown and coherent drag."""
 
     def __init__(self, click_cooldown: float = 0.3, dry_run: bool = False):
         self.mouse = Controller()
         self.screen_w, self.screen_h = get_screen_size()
         self.click_cooldown = click_cooldown
-        self.dry_run = dry_run  # riconosce tutto ma non attua nulla
+        self.dry_run = dry_run  # recognises everything but actuates nothing
         self._last_click = 0.0
         self.dragging = False
         self._scroll_accum = 0.0
         self._scroll_accum_h = 0.0
 
-    # --- movimento -------------------------------------------------------
+    # --- movement --------------------------------------------------------
     def move_to(self, x: float, y: float) -> None:
         px = int(min(max(x, 0.0), 1.0) * (self.screen_w - 1))
         py = int(min(max(y, 0.0), 1.0) * (self.screen_h - 1))
@@ -77,7 +77,7 @@ class MouseActuator:
 
     # --- scroll ----------------------------------------------------------
     def scroll(self, amount: float) -> None:
-        """Accumula lo scroll frazionario ed emette tacche intere."""
+        """Accumulates fractional scroll and emits whole notches."""
         self._scroll_accum += amount
         steps = int(self._scroll_accum)
         if steps:
@@ -97,7 +97,7 @@ class MouseActuator:
         self._scroll_accum = 0.0
         self._scroll_accum_h = 0.0
 
-    # --- pulizia ---------------------------------------------------------
+    # --- cleanup ---------------------------------------------------------
     def release_all(self) -> None:
         self.end_drag()
         self.reset_scroll()

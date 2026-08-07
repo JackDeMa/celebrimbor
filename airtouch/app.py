@@ -1,4 +1,4 @@
-"""Ciclo principale: cattura webcam -> landmark -> gesti -> mouse."""
+"""Main loop: webcam capture -> landmarks -> gestures -> mouse."""
 
 import time
 
@@ -33,7 +33,7 @@ class AirTouchApp:
         self._events: list[tuple[float, str]] = []
         self._last_mode = ""
 
-    # --- hotkey globali ----------------------------------------------------
+    # --- global hotkeys ----------------------------------------------------
     def _make_hotkeys(self) -> keyboard.GlobalHotKeys:
         return keyboard.GlobalHotKeys(
             {
@@ -48,7 +48,7 @@ class AirTouchApp:
     def toggle_pause(self) -> None:
         self.engine.set_enabled(not self.engine.enabled)
 
-    # --- ciclo principale ---------------------------------------------------
+    # --- main loop ----------------------------------------------------------
     def run(self) -> int:
         model_path = ensure_model(self.cfg.model_path) if self.cfg.model_path else ensure_model()
 
@@ -64,16 +64,16 @@ class AirTouchApp:
         )
         hotkeys = self._make_hotkeys()
         hotkeys.start()
-        print("AirTouch avviato. Ctrl+Alt+Q per uscire, Ctrl+Alt+P per la pausa.")
+        print("AirTouch started. Ctrl+Alt+Q to quit, Ctrl+Alt+P to pause.")
         if self.cfg.dry_run:
-            print("DRY-RUN: i gesti vengono riconosciuti ma il mouse non si muove.")
+            print("DRY-RUN: gestures are recognised but the mouse does not move.")
 
         last_t = time.monotonic()
         try:
             while self.running:
                 ok, frame = cap.read()
                 if not ok:
-                    print("Frame non letto dalla webcam, esco.")
+                    print("No frame read from the webcam, exiting.")
                     break
 
                 if self.cfg.mirror:
@@ -113,17 +113,17 @@ class AirTouchApp:
 
     # --- webcam -------------------------------------------------------------
     def _open_camera(self):
-        # DirectShow su Windows apre molto piu' in fretta del backend MSMF.
+        # DirectShow on Windows opens much faster than the MSMF backend.
         backend = getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY)
         cap = cv2.VideoCapture(self.cfg.camera_index, backend)
         if not cap.isOpened():
             cap = cv2.VideoCapture(self.cfg.camera_index)
         if not cap.isOpened():
-            print(f"Impossibile aprire la webcam {self.cfg.camera_index}.")
+            print(f"Cannot open webcam {self.cfg.camera_index}.")
             return None
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.frame_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.frame_height)
-        # Senza questa richiesta esplicita la webcam puo' restare a 10 fps.
+        # Without this explicit request the webcam may stay at 10 fps.
         cap.set(cv2.CAP_PROP_FPS, self.cfg.target_fps)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
@@ -138,7 +138,7 @@ class AirTouchApp:
             self.show_overlay = not self.show_overlay
         return True
 
-    # --- console (quando l'anteprima e' disattivata) -------------------------
+    # --- console (when the preview is disabled) -----------------------------
     def _log(self, state: EngineState) -> None:
         if state.mode != self._last_mode:
             self._last_mode = state.mode
@@ -167,11 +167,11 @@ class AirTouchApp:
             1,
         )
 
-        # Il punto che sta davvero pilotando il cursore: durante il pinch passa
-        # dall'indice al palmo, e qui si vede.
+        # The point actually driving the cursor: during a pinch it moves from
+        # the index finger to the palm, and you can see it here.
         if state.ref_point is not None:
             rp = (int(state.ref_point[0] * w), int(state.ref_point[1] * h))
-            anchored = state.cursor_source == "palmo"
+            anchored = state.cursor_source == "palm"
             cv2.circle(frame, rp, 11, _RED if anchored else _GREEN, 2)
             cv2.circle(frame, rp, 2, _RED if anchored else _GREEN, -1)
 
@@ -199,9 +199,9 @@ class AirTouchApp:
             1,
         )
 
-        # barre dei pinch: la tacca rossa e' la soglia di scatto, quella grigia
-        # il punto in cui il cursore si ancora al palmo
-        labels = {"index": "IND", "middle": "MED", "ring": "ANU"}
+        # pinch bars: the red tick is the click threshold, the grey one is the
+        # point where the cursor anchors to the palm
+        labels = {"index": "IDX", "middle": "MID", "ring": "RNG"}
         shown = [f for f in labels if f in state.pinches]
         for i, finger in enumerate(shown):
             y = h - 40 - 22 * (len(shown) - 1 - i)
@@ -214,7 +214,7 @@ class AirTouchApp:
             )
 
         if state.fist_hold_progress > 0.0:
-            self._progress(frame, "PUGNO FERMO", state.fist_hold_progress, h - 40 - 22 * len(shown))
+            self._progress(frame, "FIST STILL", state.fist_hold_progress, h - 40 - 22 * len(shown))
 
         for i, (_, ev) in enumerate(reversed(self._events[-3:])):
             cv2.putText(
@@ -223,7 +223,7 @@ class AirTouchApp:
 
         cv2.putText(
             frame,
-            "q=esci  p=pausa  h=overlay  |  Ctrl+Alt+Q, Ctrl+Alt+P globali",
+            "q=quit  p=pause  h=overlay  |  Ctrl+Alt+Q, Ctrl+Alt+P global",
             (10, h - 12),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
@@ -236,7 +236,7 @@ class AirTouchApp:
         for a, b in HAND_CONNECTIONS:
             cv2.line(frame, pts[a], pts[b], _WHITE, 2)
         for i, p in enumerate(pts):
-            # evidenzia pollice, indice, medio e anulare: le dita che comandano
+            # highlight thumb, index, middle and ring: the fingers in charge
             highlight = i in (hand.THUMB_TIP, hand.INDEX_TIP, hand.MIDDLE_TIP, hand.RING_TIP)
             cv2.circle(frame, p, 6 if highlight else 3, _YELLOW if highlight else _GREEN, -1)
 
@@ -255,7 +255,7 @@ class AirTouchApp:
     def _bar(
         self, frame, label: str, value: float, y: int, anchor_at: float | None = None
     ) -> None:
-        full = 1.2  # valore di fondo scala della barra
+        full = 1.2  # full-scale value of the bar
         ratio = min(max(value / full, 0.0), 1.0)
         x0, width = 50, 110
         active = value < self.cfg.pinch_on

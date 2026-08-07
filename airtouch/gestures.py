@@ -1,13 +1,13 @@
-"""Riconoscimento dei gesti: da HandFeatures a eventi con un nome.
+"""Gesture recognition: from HandFeatures to named events.
 
-Il riconoscitore non tocca il mouse: produce solo eventi. Chi li traduce in
-azioni e' il dispatcher, guidato dal file di configurazione.
+The recogniser never touches the mouse: it only produces events. Translating
+them into actions is the dispatcher's job, driven by the configuration file.
 
-Tipi di evento (kind):
-    cursor   posizione normalizzata (0..1) sullo schermo
-    trigger  evento istantaneo, scatta una volta sola
-    hold     stato acceso/spento
-    axis     movimento continuo, porta un delta per frame
+Event kinds:
+    cursor   normalised position (0..1) on the screen
+    trigger  instantaneous event, fires exactly once
+    hold     on/off state
+    axis     continuous movement, carries a per-frame delta
 """
 
 from collections import deque
@@ -17,7 +17,7 @@ from .config import Config
 from .filters import PointFilter
 from .hand import PINCH_FINGERS, HandFeatures, Hysteresis
 
-# Gesto -> tipo di evento che produce. Serve anche a validare il JSON.
+# Gesture -> kind of event it produces. Also used to validate the JSON.
 GESTURE_KINDS: dict[str, str] = {
     "point_move": "cursor",
     "pinch_index_tap": "trigger",
@@ -37,14 +37,14 @@ GESTURE_KINDS: dict[str, str] = {
 
 
 class ClosingDetector:
-    """Dice se le dita si stanno chiudendo, rispetto a come stanno di solito.
+    """Tells whether the fingers are closing in, relative to their usual rest.
 
-    Una soglia assoluta non funziona: c'e' chi tiene la mano ben aperta e chi
-    la tiene raccolta, e con le dita gia' vicine a riposo una soglia fissa
-    resterebbe scattata per sempre. Qui il riferimento e' il massimo osservato
-    negli ultimi `window` secondi, cioe' l'apertura abituale di quel momento.
-    Mentre un pinch e' in corso il riferimento si congela, altrimenti un drag
-    lungo se lo mangerebbe e l'aggancio cadrebbe a meta' trascinamento.
+    An absolute threshold does not work: some people hold their hand wide open,
+    others keep it curled, and with fingers already close at rest a fixed
+    threshold would stay latched forever. Here the reference is the maximum
+    observed over the last `window` seconds, i.e. the habitual opening at that
+    moment. While a pinch is in progress the reference freezes, otherwise a long
+    drag would eat it and the anchor would drop halfway through.
     """
 
     def __init__(self, window: float, ratio_on: float, ratio_off: float):
@@ -72,7 +72,7 @@ class ClosingDetector:
 
     @property
     def threshold(self) -> float:
-        """Distanza sotto la quale scatta l'aggancio, per l'anteprima."""
+        """Distance below which anchoring kicks in, for the preview window."""
         return self.baseline * self.ratio_on
 
     def reset(self) -> None:
@@ -90,15 +90,15 @@ class GestureEvent:
 
 @dataclass
 class Recognition:
-    """Esito di un frame: eventi da eseguire piu' informazioni per l'HUD."""
+    """Outcome of one frame: events to run plus information for the HUD."""
 
     events: list[GestureEvent] = field(default_factory=list)
     mode: str = "NO HAND"
     detail: str = ""
-    fist_hold_progress: float = 0.0  # 0..1, avanzamento del pugno fermo
-    cursor_source: str = ""          # "indice" o "palmo"
-    ref_point: tuple[float, float] | None = None  # riferimento, in coordinate immagine
-    anchor_at: dict[str, float] = field(default_factory=dict)  # soglie di aggancio
+    fist_hold_progress: float = 0.0  # 0..1, progress of the still fist
+    cursor_source: str = ""          # "index" or "palm"
+    ref_point: tuple[float, float] | None = None  # reference, in image coordinates
+    anchor_at: dict[str, float] = field(default_factory=dict)  # anchoring thresholds
 
 
 class GestureRecognizer:
@@ -106,10 +106,11 @@ class GestureRecognizer:
         self.cfg = cfg
         self.cursor_filter = PointFilter(cfg.min_cutoff, cfg.beta, cfg.d_cutoff)
 
-        # Tutti i pinch vengono misurati, anche quelli senza azione collegata:
-        # servono comunque a disambiguare (toccando l'anulare col pollice anche
-        # il medio finisce vicino, e senza confronto partirebbe un click sbagliato).
-        # Gli eventi pero' escono solo per i pinch collegati a qualcosa.
+        # Every pinch is measured, even the ones without a bound action: they
+        # are still needed to disambiguate (touching the ring finger with the
+        # thumb brings the middle finger close too, and without the comparison
+        # the wrong click would fire). Events, however, are emitted only for
+        # pinches that are actually bound to something.
         self.fingers = list(PINCH_FINGERS)
         self.bound = [
             f
@@ -122,7 +123,7 @@ class GestureRecognizer:
         self._down_at: dict[str, float | None] = {f: None for f in self.fingers}
         self._holding: dict[str, bool] = {f: False for f in self.fingers}
 
-        # ancoraggio del cursore
+        # cursor anchoring
         self._closing = {
             f: ClosingDetector(cfg.anchor_window, cfg.anchor_ratio_on, cfg.anchor_ratio_off)
             for f in self.bound
@@ -130,17 +131,17 @@ class GestureRecognizer:
         self._was_anchored = False
         self._anchor_name = self._valid_anchor(cfg.anchor_point)
         self._offset = (0.0, 0.0)
-        self._offset_from: float | None = None  # istante del cambio, per il riassorbimento
+        self._offset_from: float | None = None  # moment of the switch, for the blend
         self._offset_decays = False
         self._prev_ref: tuple[float, float] | None = None
 
-        # pugno
+        # fist
         self._fist_track: deque[tuple[float, float, float]] = deque()  # (t, x, y)
         self._fist_still_since: float | None = None
         self._fist_hold_done = False
         self._swipe_block_until = 0.0
 
-        # due dita
+        # two fingers
         self._two_origin: tuple[float, float] | None = None
         self._two_last: tuple[float, float] | None = None
         self._two_axis: str | None = None
@@ -149,7 +150,7 @@ class GestureRecognizer:
 
     # ------------------------------------------------------------------
     def reset(self) -> list[GestureEvent]:
-        """Riporta tutto a riposo, restituendo gli eventi di chiusura."""
+        """Bring everything back to rest, returning the closing events."""
         events = self._release_pinches()
         self.cursor_filter.reset()
         self._fist_track.clear()
@@ -175,26 +176,26 @@ class GestureRecognizer:
             return Recognition(mode="NO HAND")
         self._missing = 0
 
-        # --- pugno: swipe direzionali e pugno fermo -----------------------
+        # --- fist: directional swipes and still fist ----------------------
         if feats.is_fist:
             self._end_two_finger()
             self._forget_reference()
             return self._fist(feats, t)
         self._reset_fist()
 
-        # --- due dita: assi continui ---------------------------------------
+        # --- two fingers: continuous axes -----------------------------------
         if self._is_two_finger(feats):
             self._forget_reference()
             events = self._release_pinches()
             events += self._two_finger(feats)
             return Recognition(
                 events=events,
-                mode="DUE DITA",
-                detail=self._two_axis or "scegli la direzione",
+                mode="TWO FINGERS",
+                detail=self._two_axis or "pick a direction",
             )
         self._end_two_finger()
 
-        # --- pinch: click e drag --------------------------------------------
+        # --- pinch: clicks and drag -----------------------------------------
         events = self._pinches(feats, t)
 
         ref, source = self._reference(feats, t)
@@ -206,9 +207,9 @@ class GestureRecognizer:
         if holding:
             mode, detail = "DRAG", holding[0]
         elif closed:
-            mode, detail = "PINCH", f"{closed[0]}: rilascia per il click"
+            mode, detail = "PINCH", f"{closed[0]}: release to click"
         else:
-            mode, detail = "PUNTAMENTO", ""
+            mode, detail = "POINTING", ""
         return Recognition(
             events=events,
             mode=mode,
@@ -218,28 +219,28 @@ class GestureRecognizer:
             anchor_at={f: d.threshold for f, d in self._closing.items()},
         )
 
-    # --- riferimento del cursore -------------------------------------------
+    # --- cursor reference ---------------------------------------------------
     def _valid_anchor(self, name: str) -> str:
         valid = ("palm_outer", "palm_center", "pinky_mcp", "index_mcp", "wrist")
         if name in valid:
             return name
         print(
-            f"Attenzione: anchor_point {name!r} sconosciuto "
-            f"(validi: {', '.join(valid)}), uso 'palm_outer'."
+            f"Warning: unknown anchor_point {name!r} "
+            f"(valid: {', '.join(valid)}), falling back to 'palm_outer'."
         )
         return "palm_outer"
 
     def _reference(self, feats: HandFeatures, t: float) -> tuple[tuple[float, float], str]:
-        """Punto che pilota il cursore, con passaggio indolore indice <-> palmo.
+        """Point driving the cursor, with a seamless index <-> palm switch.
 
-        Chiudendo le dita per un click la punta dell'indice si sposta sempre un
-        po': appena il pinch inizia a stringersi si passa a un punto del palmo,
-        che invece resta fermo. Per non far saltare il cursore nell'istante del
-        cambio, lo scarto tra i due punti viene congelato e sommato al nuovo
-        riferimento; al ritorno all'indice lo scarto si riassorbe in
-        `anchor_blend` secondi.
+        Closing the fingers for a click always shifts the index fingertip a
+        little: as soon as the pinch starts tightening we switch to a point on
+        the palm, which instead stays put. So the cursor does not jump at the
+        moment of the switch, the offset between the two points is frozen and
+        added to the new reference; on the way back to the index finger the
+        offset is blended away over `anchor_blend` seconds.
         """
-        # Basta che uno qualsiasi dei pinch in uso si stia stringendo.
+        # It is enough for any of the pinches in use to be tightening.
         anchored = False
         for finger, detector in self._closing.items():
             if detector.update(feats.pinches[finger], t, frozen=self._pinch[finger].state):
@@ -256,7 +257,7 @@ class GestureRecognizer:
                 self._prev_ref[0] - raw[0],
                 self._prev_ref[1] - raw[1],
             )
-            self._offset_decays = not anchored  # tornando all'indice lo scarto sfuma
+            self._offset_decays = not anchored  # back on the index, the offset fades
             self._offset_from = t
 
         weight = 1.0
@@ -266,13 +267,14 @@ class GestureRecognizer:
 
         point = (raw[0] + self._offset[0] * weight, raw[1] + self._offset[1] * weight)
         self._prev_ref = point
-        return point, ("palmo" if anchored else "indice")
+        return point, ("palm" if anchored else "index")
 
     def _forget_reference(self) -> None:
-        """Il cursore non e' in uso: la prossima volta si riparte da zero.
+        """The cursor is not in use: next time we start from scratch.
 
-        L'apertura abituale delle dita non si dimentica: e' un dato sulla mano,
-        non sul gesto in corso, e i campioni vecchi scadono da soli.
+        The habitual finger opening is not forgotten: it is a fact about the
+        hand, not about the gesture in progress, and old samples expire on their
+        own.
         """
         self._prev_ref = None
         self._offset = (0.0, 0.0)
@@ -281,15 +283,15 @@ class GestureRecognizer:
             detector.closed = False
         self._was_anchored = False
 
-    # --- pugno ------------------------------------------------------------
+    # --- fist ---------------------------------------------------------------
     def _fist(self, feats: HandFeatures, t: float) -> Recognition:
         events = self._release_pinches()
         self.cursor_filter.reset()
 
         cfg = self.cfg
         x, y = feats.palm_point
-        # Le distanze sono in "mani": cosi' la soglia non dipende da quanto
-        # sei lontano dalla webcam.
+        # Distances are in "hands": that way the threshold does not depend on
+        # how far you are from the webcam.
         x, y = x / feats.scale, y / feats.scale
 
         self._fist_track.append((t, x, y))
@@ -299,7 +301,7 @@ class GestureRecognizer:
         travel_x = x - self._fist_track[0][1]
         travel_y = y - self._fist_track[0][2]
 
-        # fermo o in movimento?
+        # still or moving?
         moving = max(abs(travel_x), abs(travel_y)) > cfg.fist_still_travel
         if moving:
             self._fist_still_since = None
@@ -319,11 +321,11 @@ class GestureRecognizer:
                 self._fist_track.clear()
                 self._swipe_block_until = t + cfg.swipe_cooldown
                 self._fist_still_since = None
-                return Recognition(events=events, mode="PUGNO", detail=name)
+                return Recognition(events=events, mode="FIST", detail=name)
 
-        # --- pugno fermo -------------------------------------------------
+        # --- still fist ----------------------------------------------------
         progress = 0.0
-        detail = "swipe o tieni fermo"
+        detail = "swipe or hold still"
         if self._fist_still_since is not None:
             held = t - self._fist_still_since
             progress = min(held / cfg.fist_hold_seconds, 1.0)
@@ -332,12 +334,12 @@ class GestureRecognizer:
                 events.append(GestureEvent("fist_hold", "trigger"))
                 detail = "fist_hold"
             elif not self._fist_hold_done:
-                detail = f"fermo {held:.1f}/{cfg.fist_hold_seconds:.0f}s"
+                detail = f"still {held:.1f}/{cfg.fist_hold_seconds:.0f}s"
             else:
-                detail = "gia' scattato"
+                detail = "already fired"
 
         return Recognition(
-            events=events, mode="PUGNO", detail=detail, fist_hold_progress=progress
+            events=events, mode="FIST", detail=detail, fist_hold_progress=progress
         )
 
     def _reset_fist(self) -> None:
@@ -345,7 +347,7 @@ class GestureRecognizer:
         self._fist_still_since = None
         self._fist_hold_done = False
 
-    # --- due dita ----------------------------------------------------------
+    # --- two fingers --------------------------------------------------------
     def _is_two_finger(self, feats: HandFeatures) -> bool:
         return (
             feats.index_extended
@@ -363,22 +365,22 @@ class GestureRecognizer:
             return []
 
         if self._two_axis is None:
-            # L'asse si sceglie una volta sola, alla prima escursione decisa:
-            # senza questo blocco un movimento diagonale farebbe scattare
-            # scroll e volume insieme.
+            # The axis is chosen once only, on the first decisive travel:
+            # without this lock a diagonal movement would fire scroll and
+            # volume at the same time.
             dx = point[0] - self._two_origin[0]
             dy = point[1] - self._two_origin[1]
             if max(abs(dx), abs(dy)) < self.cfg.axis_lock_travel:
                 self._two_last = point
                 return []
-            self._two_axis = "orizzontale" if abs(dx) > abs(dy) else "verticale"
+            self._two_axis = "horizontal" if abs(dx) > abs(dy) else "vertical"
 
         events = []
-        if self._two_axis == "verticale":
-            delta = self._two_last[1] - point[1]  # mano in alto -> valore positivo
+        if self._two_axis == "vertical":
+            delta = self._two_last[1] - point[1]  # hand up -> positive value
             name = "two_finger_vertical"
         else:
-            delta = point[0] - self._two_last[0]  # mano a destra -> positivo
+            delta = point[0] - self._two_last[0]  # hand right -> positive
             name = "two_finger_horizontal"
         self._two_last = point
 
@@ -396,9 +398,9 @@ class GestureRecognizer:
         events: list[GestureEvent] = []
         closed = {f: self._pinch[f].update(feats.pinches[f]) for f in self.fingers}
 
-        # Con le dita ripiegate le punte finiscono vicine tra loro: se piu' di
-        # un pinch risulta chiuso vince quello effettivamente piu' stretto, cosi'
-        # i click non si confondono mai.
+        # With the fingers curled the tips end up close to each other: if more
+        # than one pinch reads as closed, the actually tightest one wins, so
+        # clicks never get mixed up.
         active = [f for f, c in closed.items() if c]
         if len(active) > 1:
             winner = min(active, key=lambda f: feats.pinches[f])
@@ -428,7 +430,7 @@ class GestureRecognizer:
         return events
 
     def _release_pinches(self) -> list[GestureEvent]:
-        """Chiude i pinch in sospeso senza generare click involontari."""
+        """Close the pending pinches without generating accidental clicks."""
         events: list[GestureEvent] = []
         for finger in self.fingers:
             if self._holding[finger]:
@@ -438,7 +440,7 @@ class GestureRecognizer:
             self._pinch[finger].reset()
         return events
 
-    # --- mappatura sullo schermo ---------------------------------------------
+    # --- mapping onto the screen ---------------------------------------------
     def _to_screen(self, x: float, y: float) -> tuple[float, float]:
         c = self.cfg
         u = (x - c.active_x_min) / max(c.active_x_max - c.active_x_min, 1e-6)

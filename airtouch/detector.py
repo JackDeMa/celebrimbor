@@ -1,8 +1,8 @@
-"""Rilevamento della mano con MediaPipe Tasks (HandLandmarker).
+"""Hand detection with MediaPipe Tasks (HandLandmarker).
 
-Le vecchie `mediapipe.solutions` sono state rimosse dalle versioni recenti di
-MediaPipe: qui si usa la Tasks API, che richiede il file del modello scaricato
-una volta sola (vedi `ensure_model`).
+The old `mediapipe.solutions` have been dropped from recent MediaPipe releases:
+this uses the Tasks API instead, which needs the model file downloaded once
+(see `ensure_model`).
 """
 
 from pathlib import Path
@@ -23,7 +23,7 @@ HAND_CONNECTIONS = [
 
 
 def ensure_model(path: Path = DEFAULT_MODEL_PATH) -> Path:
-    """Restituisce il percorso del modello, scaricandolo se assente."""
+    """Return the model path, downloading the file if it is missing."""
     path = Path(path)
     if path.exists() and path.stat().st_size > 0:
         return path
@@ -31,16 +31,16 @@ def ensure_model(path: Path = DEFAULT_MODEL_PATH) -> Path:
     import urllib.request
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Scarico il modello HandLandmarker in {path} ...")
+    print(f"Downloading the HandLandmarker model to {path} ...")
     tmp = path.with_suffix(".part")
     urllib.request.urlretrieve(MODEL_URL, tmp)
     tmp.replace(path)
-    print("Modello pronto.")
+    print("Model ready.")
     return path
 
 
 class HandDetector:
-    """Wrapper sincrono in modalita' VIDEO: un frame dentro, i landmark fuori."""
+    """Synchronous wrapper in VIDEO mode: a frame in, the landmarks out."""
 
     def __init__(
         self,
@@ -61,8 +61,8 @@ class HandDetector:
         self._last_ts = -1
 
     def detect(self, rgb_frame, timestamp_ms: int):
-        """Ritorna la lista dei 21 landmark della prima mano, o None."""
-        # La Tasks API pretende timestamp strettamente crescenti.
+        """Return the 21 landmarks of the first hand, or None."""
+        # The Tasks API demands strictly increasing timestamps.
         if timestamp_ms <= self._last_ts:
             timestamp_ms = self._last_ts + 1
         self._last_ts = timestamp_ms

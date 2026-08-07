@@ -1,24 +1,25 @@
-﻿# AirTouch
+# AirTouch
 
-Controlla mouse, volume e finestre di Windows muovendo la mano davanti alla webcam.
+Control the mouse, the volume and Windows windows by moving your hand in front
+of the webcam.
 
-Stack: **OpenCV** (cattura) + **MediaPipe HandLandmarker** (21 punti della mano) +
-**pynput** (mouse e tastiera reali).
+Stack: **OpenCV** (capture) + **MediaPipe HandLandmarker** (21 hand landmarks) +
+**pynput** (real mouse and keyboard).
 
-Ogni gesto e' collegato alla sua azione in [gestures.json](gestures.json): il
-riconoscimento e l'azione sono separati, quindi puoi rimappare tutto senza
-toccare il codice.
+Every gesture is bound to its action in [gestures.json](gestures.json):
+recognition and action are kept separate, so you can remap everything without
+touching the code.
 
-## Avvio rapido
+## Quick start
 
 ```
-avvia.bat
+start.bat
 ```
 
-Al primo avvio crea `.venv`, installa le dipendenze e scarica il modello
-`hand_landmarker.task` (~8 MB) in `models/`.
+On the first run it creates `.venv`, installs the dependencies and downloads the
+`hand_landmarker.task` model (~8 MB) into `models/`.
 
-Manualmente:
+Manually:
 
 ```
 python -m venv .venv
@@ -26,70 +27,70 @@ python -m venv .venv
 .venv\Scripts\python.exe main.py
 ```
 
-## Gesti riconosciuti
+## Recognised gestures
 
-| Gesto | Nome nel JSON | Azione predefinita |
+| Gesture | Name in the JSON | Default action |
 |---|---|---|
-| Mano aperta che si muove | `point_move` | Muove il cursore |
-| Pinch **pollice + indice**, tocco breve | `pinch_index_tap` | Click sinistro |
-| Pinch **pollice + indice** tenuto > 0.45 s | `pinch_index_hold` | Drag |
-| Pinch **pollice + medio**, tocco breve | `pinch_middle_tap` | Click destro |
-| Pinch **pollice + anulare** | `pinch_ring_tap` / `_hold` | *(disponibile, non collegato)* |
-| **Pugno** che scatta a sinistra | `fist_swipe_left` | `Ctrl+Win+â†` (desktop precedente) |
-| **Pugno** che scatta a destra | `fist_swipe_right` | `Ctrl+Win+â†’` (desktop successivo) |
-| **Pugno** che scatta in alto | `fist_swipe_up` | `Alt+Tab` |
-| **Pugno** che scatta in basso | `fist_swipe_down` | `Alt+Shift+Tab` |
-| **Pugno** chiuso e fermo per 5 s | `fist_hold` | Play / Pausa |
-| **Indice + medio** aperti, mano su/giu' | `two_finger_vertical` | Scroll come la rotella |
-| **Indice + medio** aperti, mano dx/sx | `two_finger_horizontal` | Volume su / giu' |
+| Open hand moving around | `point_move` | Moves the cursor |
+| Pinch **thumb + index**, short tap | `pinch_index_tap` | Left click |
+| Pinch **thumb + index** held > 0.45 s | `pinch_index_hold` | Drag |
+| Pinch **thumb + middle**, short tap | `pinch_middle_tap` | Right click |
+| Pinch **thumb + ring** | `pinch_ring_tap` / `_hold` | *(available, not bound)* |
+| **Fist** flicked left | `fist_swipe_left` | `Ctrl+Win+Left` (previous desktop) |
+| **Fist** flicked right | `fist_swipe_right` | `Ctrl+Win+Right` (next desktop) |
+| **Fist** flicked up | `fist_swipe_up` | `Alt+Tab` |
+| **Fist** flicked down | `fist_swipe_down` | `Alt+Shift+Tab` |
+| **Fist** closed and still for 5 s | `fist_hold` | Play / Pause |
+| **Index + middle** open, hand up/down | `two_finger_vertical` | Scroll, like the wheel |
+| **Index + middle** open, hand right/left | `two_finger_horizontal` | Volume up / down |
 
-Note pratiche:
+Practical notes:
 
-- Col pugno chiuso il cursore resta fermo: e' anche il modo per riposizionare
-  la mano senza trascinare il puntatore.
-- Un pinch non collegato a nessuna azione non produce eventi, ma viene misurato
-  lo stesso: serve a distinguere i click fra loro (toccando l'anulare col
-  pollice anche il medio finisce vicino, e senza confronto partirebbe il click
-  sbagliato). Vince sempre il pinch effettivamente piu' stretto.
-- Con indice e medio aperti l'**asse si blocca** alla prima escursione decisa:
-  un movimento diagonale non fa scattare scroll e volume insieme.
-- Dopo uno swipe c'e' una pausa di 0.8 s, per non incatenare `Alt+Tab` a raffica.
-- La barra `PUGNO FERMO` nell'anteprima mostra l'avanzamento verso i 5 secondi.
+- With a closed fist the cursor stays put: that is also how you reposition your
+  hand without dragging the pointer along.
+- A pinch not bound to any action produces no events, but it is measured all the
+  same: it is what tells the clicks apart (touching the ring finger with the
+  thumb brings the middle finger close too, and without the comparison the wrong
+  click would fire). The genuinely tightest pinch always wins.
+- With index and middle finger open the **axis locks** on the first decisive
+  travel: a diagonal movement will not fire scroll and volume together.
+- After a swipe there is a 0.8 s pause, so `Alt+Tab` does not machine-gun.
+- The `FIST STILL` bar in the preview shows the progress towards the 5 seconds.
 
-## Come sta fermo il cursore mentre clicchi
+## How the cursor stays put while you click
 
-Chiudendo il pollice sull'indice per cliccare, la punta dell'indice si sposta
-sempre un po': se fosse lei a pilotare il cursore, ogni click partirebbe qualche
-decina di pixel piu' in la'. Il programma allora **cambia punto di riferimento**:
-appena le dita cominciano a chiudersi il cursore passa a seguire il bordo
-esterno del palmo (lato mignolo, fra polso e base del mignolo), che durante un
-pinch non si muove.
+When you close your thumb onto your index finger to click, the index fingertip
+always shifts a little: if it were the one driving the cursor, every click would
+land a few dozen pixels off. So the program **changes its reference point**: as
+soon as the fingers start closing, the cursor switches to following the outer
+edge of the palm (pinky side, between wrist and pinky base), which does not move
+during a pinch.
 
-Due dettagli che lo rendono trasparente:
+Two details make it seamless:
 
-- **Nessuno scatto al cambio.** Lo scarto fra i due punti viene congelato
-  nell'istante del passaggio e sommato al nuovo riferimento, quindi il cursore
-  resta esattamente dov'era; al ritorno all'indice lo scarto si riassorbe in
-  `anchor_blend` secondi.
-- **Soglia relativa, non assoluta.** Il programma misura di continuo quanto
-  sono distanti le dita a riposo (il massimo degli ultimi `anchor_window`
-  secondi) e aggancia quando si chiudono sotto l'80% di quel valore. Con una
-  soglia fissa, chi tiene le dita naturalmente raccolte resterebbe agganciato
-  per sempre. Mentre un click o un drag e' in corso il riferimento si congela,
-  altrimenti un trascinamento lungo se lo mangerebbe.
+- **No jump at the switch.** The offset between the two points is frozen at the
+  moment of the switch and added to the new reference, so the cursor stays
+  exactly where it was; on the way back to the index finger the offset is
+  blended away over `anchor_blend` seconds.
+- **Relative threshold, not absolute.** The program continuously measures how
+  far apart the fingers are at rest (the maximum over the last `anchor_window`
+  seconds) and anchors when they close below 80% of that value. With a fixed
+  threshold, anyone who naturally keeps their fingers curled would stay anchored
+  forever. While a click or a drag is in progress the reference freezes,
+  otherwise a long drag would eat it.
 
-Nell'anteprima si vede tutto: un cerchio evidenzia il punto che sta pilotando il
-cursore (verde = indice, rosso = palmo), l'intestazione dice `[indice]` o
-`[palmo]`, e su ogni barra dei pinch la tacca grigia e' la soglia di aggancio
-(che si sposta da sola) mentre quella rossa e' la soglia di click.
+The preview shows all of it: a circle highlights the point currently driving the
+cursor (green = index finger, red = palm), the header says `[index]` or `[palm]`,
+and on each pinch bar the grey tick is the anchoring threshold (which moves on
+its own) while the red one is the click threshold.
 
-Con `anchor_point` si puo' scegliere un altro riferimento: `palm_outer`
-(predefinito), `palm_center`, `pinky_mcp`, `index_mcp`, `wrist`.
+With `anchor_point` you can pick a different reference: `palm_outer` (default),
+`palm_center`, `pinky_mcp`, `index_mcp`, `wrist`.
 
-## Configurare i gesti
+## Configuring the gestures
 
-Tutto sta in [gestures.json](gestures.json). Le righe che iniziano con `//` sono
-commenti (estensione locale: JSON puro non li prevede).
+Everything lives in [gestures.json](gestures.json). Lines starting with `//` are
+comments (local extension: plain JSON does not have them).
 
 ```jsonc
 {
@@ -109,42 +110,42 @@ commenti (estensione locale: JSON puro non li prevede).
 }
 ```
 
-Elenco sempre aggiornato di gesti e azioni:
+An always up-to-date list of gestures and actions:
 
 ```
 python main.py --list-gestures
 ```
 
-### Azioni come stringa
+### Actions as a string
 
-| Stringa | Effetto |
+| String | Effect |
 |---|---|
-| `move_cursor` | Muove il puntatore |
-| `left_click`, `right_click`, `middle_click`, `double_click` | Click |
-| `drag` | Tiene premuto il tasto sinistro |
-| `scroll`, `scroll_h` | Rotella verticale / orizzontale |
-| `volume` | Volume su/giu' proporzionale al movimento |
-| `none` | Disattiva il gesto |
-| qualsiasi combinazione di tasti | `"alt+tab"`, `"ctrl+win+left"`, `"win+d"`, `"play_pause"`, `"volume_up"`, `"mute"`, `"next_track"`, `"f5"` |
+| `move_cursor` | Moves the pointer |
+| `left_click`, `right_click`, `middle_click`, `double_click` | Clicks |
+| `drag` | Holds the left button down |
+| `scroll`, `scroll_h` | Vertical / horizontal wheel |
+| `volume` | Volume up/down, proportional to the movement |
+| `none` | Disables the gesture |
+| any key combination | `"alt+tab"`, `"ctrl+win+left"`, `"win+d"`, `"play_pause"`, `"volume_up"`, `"mute"`, `"next_track"`, `"f5"` |
 
-Modificatori validi: `ctrl`, `alt`, `shift`, `win`. Tasti speciali: frecce,
-`tab`, `enter`, `esc`, `space`, `home`, `end`, `pageup`, `pagedown`, `delete`,
-`f1`â€“`f20`, piu' i multimediali (`play_pause`, `stop`, `next_track`,
+Valid modifiers: `ctrl`, `alt`, `shift`, `win`. Special keys: arrows, `tab`,
+`enter`, `esc`, `space`, `home`, `end`, `pageup`, `pagedown`, `delete`,
+`f1`-`f20`, plus the media keys (`play_pause`, `stop`, `next_track`,
 `prev_track`, `volume_up`, `volume_down`, `mute`).
 
-### Azioni in forma estesa
+### Actions in extended form
 
-| `action` | Parametri | Note |
+| `action` | Parameters | Notes |
 |---|---|---|
-| `hotkey` | `keys` | Come la stringa, ma esplicito |
-| `scroll` | `gain`, `invert`, `horizontal` | `gain` = tacche per larghezza schermo |
-| `volume` | `gain` | Gradini di volume per unita' di movimento |
-| `click` | `button`, `count` | `count: 2` per il doppio click |
-| `axis` | `positive`, `negative`, `gain`, `max_rate` | Movimento continuo -> pressioni ripetute |
+| `hotkey` | `keys` | Same as the string, but explicit |
+| `scroll` | `gain`, `invert`, `horizontal` | `gain` = notches per screen width |
+| `volume` | `gain` | Volume steps per unit of movement |
+| `click` | `button`, `count` | `count: 2` for a double click |
+| `axis` | `positive`, `negative`, `gain`, `max_rate` | Continuous movement -> repeated presses |
 
-`axis` e' il caso generale: `volume` non e' altro che questo, con `volume_up` e
-`volume_down` ai due estremi. Per far scorrere i desktop virtuali muovendo due
-dita in orizzontale:
+`axis` is the general case: `volume` is nothing but this, with `volume_up` and
+`volume_down` at the two ends. To scroll through virtual desktops by moving two
+fingers horizontally:
 
 ```jsonc
 "two_finger_horizontal": {
@@ -156,165 +157,165 @@ dita in orizzontale:
 }
 ```
 
-Se una voce e' sbagliata il programma non si pianta: stampa un avviso preciso
-(gesto inesistente, tasto sconosciuto, azione incompatibile col tipo di gesto)
-e prosegue con il resto della configurazione.
+If an entry is wrong the program does not fall over: it prints a precise warning
+(unknown gesture, unknown key, action incompatible with the gesture kind) and
+carries on with the rest of the configuration.
 
-### Tipi di gesto
+### Gesture kinds
 
-Ogni gesto ha un tipo, e accetta solo azioni compatibili:
+Every gesture has a kind, and only accepts compatible actions:
 
-| Tipo | Significato | Azioni ammesse |
+| Kind | Meaning | Allowed actions |
 |---|---|---|
-| `cursor` | Posizione sullo schermo | `move_cursor` |
-| `trigger` | Evento istantaneo | click, hotkey |
-| `hold` | Stato acceso/spento | `drag` |
-| `axis` | Movimento continuo | `scroll`, `volume`, `axis` |
+| `cursor` | Position on the screen | `move_cursor` |
+| `trigger` | Instantaneous event | clicks, hotkeys |
+| `hold` | On/off state | `drag` |
+| `axis` | Continuous movement | `scroll`, `volume`, `axis` |
 
-## Comandi
+## Commands
 
-| Tasto | Effetto |
+| Key | Effect |
 |---|---|
-| `Ctrl+Alt+Q` | Esce (globale, funziona anche senza finestra a fuoco) |
-| `Ctrl+Alt+P` | Pausa / riprende il controllo (globale) |
-| `q` o `Esc` | Esce (con la finestra di anteprima a fuoco) |
-| `p` | Pausa |
-| `h` | Mostra/nasconde lo scheletro della mano |
+| `Ctrl+Alt+Q` | Quit (global, works even without window focus) |
+| `Ctrl+Alt+P` | Pause / resume control (global) |
+| `q` or `Esc` | Quit (with the preview window focused) |
+| `p` | Pause |
+| `h` | Show/hide the hand skeleton |
 
-Le due scorciatoie globali sono la via di fuga: se il cursore impazzisce,
-`Ctrl+Alt+P` restituisce subito il controllo alla mano vera.
+The two global shortcuts are the escape hatch: if the cursor goes wild,
+`Ctrl+Alt+P` immediately hands control back to your real hand.
 
-## Opzioni da riga di comando
+## Command-line options
 
 ```
 main.py [--config gestures.json] [--camera 0] [--width 640] [--height 480]
         [--fps 30] [--no-preview] [--no-mirror] [--dry-run]
-        [--smoothing 1.2] [--sensitivity 1.0] [--model PERCORSO]
+        [--smoothing 1.2] [--sensitivity 1.0] [--model PATH]
         [--list-gestures]
 ```
 
-Le opzioni da riga di comando hanno la precedenza sulla sezione `settings`
-del JSON.
+Command-line options take precedence over the `settings` section of the JSON.
 
-- `--dry-run` â€” riconosce i gesti e mostra tutto, ma **non** tocca mouse e
-  tastiera. Usalo per tarare le soglie in sicurezza.
-- `--sensitivity` â€” > 1 riduce l'area attiva (basta muovere poco la mano),
-  < 1 la allarga (piu' precisione, piu' movimento).
-- `--smoothing` â€” frequenza di taglio del filtro: valori bassi (0.5) danno un
-  cursore molto fluido ma piu' lento, valori alti (3) piu' reattivo ma nervoso.
+- `--dry-run` - recognises gestures and shows everything, but does **not** touch
+  the mouse and keyboard. Use it to tune the thresholds safely.
+- `--sensitivity` - > 1 shrinks the active area (you barely have to move your
+  hand), < 1 widens it (more precision, more movement).
+- `--smoothing` - the filter's cutoff frequency: low values (0.5) give a very
+  smooth but slower cursor, high values (3) a more responsive but jumpier one.
 
-## Anteprima
+## Preview
 
-La finestra mostra lo scheletro della mano, il rettangolo dell'**area attiva**
-(la porzione di inquadratura mappata sull'intero schermo), la modalita' corrente
-con il riferimento in uso, gli fps, le barre `IND` / `MED` / `ANU` con la
-distanza di ogni pinch (tacca rossa = soglia di click, tacca grigia = soglia di
-aggancio al palmo) e la barra `PUGNO FERMO` mentre tieni il pugno chiuso.
-Compaiono solo le barre dei pinch effettivamente collegati a un'azione.
+The window shows the hand skeleton, the rectangle of the **active area** (the
+portion of the frame mapped onto the whole screen), the current mode with the
+reference point in use, the fps, the `IDX` / `MID` / `RNG` bars with each pinch
+distance (red tick = click threshold, grey tick = palm anchoring threshold) and
+the `FIST STILL` bar while you hold your fist closed. Only the bars of pinches
+actually bound to an action are shown.
 
-## Struttura
+## Structure
 
-| File | Ruolo |
+| File | Role |
 |---|---|
-| [main.py](main.py) | Riga di comando |
-| [gestures.json](gestures.json) | Mappatura gesto -> azione |
-| [airtouch/config.py](airtouch/config.py) | Soglie e parametri |
-| [airtouch/detector.py](airtouch/detector.py) | MediaPipe Tasks + download del modello |
-| [airtouch/hand.py](airtouch/hand.py) | Dai 21 landmark a dita estese / pinch |
-| [airtouch/gestures.py](airtouch/gestures.py) | Riconoscimento: produce eventi con un nome |
-| [airtouch/bindings.py](airtouch/bindings.py) | Lettura e validazione del JSON |
-| [airtouch/actions.py](airtouch/actions.py) | Le azioni eseguibili (click, tasti, scroll) |
-| [airtouch/engine.py](airtouch/engine.py) | Collega gli eventi alle azioni |
-| [airtouch/controller.py](airtouch/controller.py) | Mouse reale |
-| [airtouch/filters.py](airtouch/filters.py) | Filtro One Euro (anti-tremolio) |
-| [airtouch/app.py](airtouch/app.py) | Ciclo webcam + anteprima |
+| [main.py](main.py) | Command line |
+| [gestures.json](gestures.json) | Gesture -> action mapping |
+| [airtouch/config.py](airtouch/config.py) | Thresholds and parameters |
+| [airtouch/detector.py](airtouch/detector.py) | MediaPipe Tasks + model download |
+| [airtouch/hand.py](airtouch/hand.py) | From the 21 landmarks to extended fingers / pinches |
+| [airtouch/gestures.py](airtouch/gestures.py) | Recognition: produces named events |
+| [airtouch/bindings.py](airtouch/bindings.py) | Reading and validating the JSON |
+| [airtouch/actions.py](airtouch/actions.py) | The runnable actions (clicks, keys, scroll) |
+| [airtouch/engine.py](airtouch/engine.py) | Connects events to actions |
+| [airtouch/controller.py](airtouch/controller.py) | The real mouse |
+| [airtouch/filters.py](airtouch/filters.py) | One Euro filter (anti-jitter) |
+| [airtouch/app.py](airtouch/app.py) | Webcam loop + preview |
 
-## Taratura
+## Tuning
 
-Le soglie stanno in [airtouch/config.py](airtouch/config.py) e si possono
-sovrascrivere dalla sezione `settings` del JSON:
+The thresholds live in [airtouch/config.py](airtouch/config.py) and can be
+overridden from the `settings` section of the JSON:
 
-- `pinch_on` / `pinch_off` â€” quanto vicine devono essere le dita per un click
-  (doppia soglia: evita il tremolio a cavallo del limite).
-- `drag_hold` â€” quanto tenere il pinch prima che diventi un drag.
+- `pinch_on` / `pinch_off` - how close the fingers must be for a click (double
+  threshold: avoids flicker around the limit).
+- `drag_hold` - how long to hold the pinch before it becomes a drag.
 - `anchor_point` / `anchor_ratio_on` / `anchor_ratio_off` / `anchor_window` /
-  `anchor_blend` â€” l'aggancio del cursore al palmo durante il pinch (sopra).
-  Metti `anchor_ratio_on` a 0 per disattivarlo e tornare a seguire solo l'indice.
-- `swipe_min_travel` / `swipe_window` / `swipe_cooldown` â€” quanto ampio e veloce
-  dev'essere lo scatto del pugno. Le distanze sono in "mani", cioe' multipli
-  della dimensione della mano inquadrata: la soglia non cambia se ti avvicini
-  o ti allontani dalla webcam.
-- `fist_still_travel` / `fist_hold_seconds` â€” quanto fermo e per quanto tempo.
-- `axis_lock_travel` / `axis_deadzone` â€” quando l'asse delle due dita si decide
-  e sotto quale movimento si ignora.
-- `active_x_*` / `active_y_*` â€” la porzione di frame usata come tavoletta.
-- `min_cutoff` / `beta` â€” filtro One Euro: `min_cutoff` basso = piu' fluido,
-  `beta` alto = meno latenza sui movimenti rapidi.
+  `anchor_blend` - the cursor anchoring to the palm during a pinch (see above).
+  Set `anchor_ratio_on` to 0 to disable it and go back to following the index
+  finger only.
+- `swipe_min_travel` / `swipe_window` / `swipe_cooldown` - how wide and how fast
+  the fist flick has to be. Distances are in "hands", i.e. multiples of the size
+  of the hand in frame: the threshold does not change if you move closer to or
+  farther from the webcam.
+- `fist_still_travel` / `fist_hold_seconds` - how still, and for how long.
+- `axis_lock_travel` / `axis_deadzone` - when the two-finger axis is decided and
+  below which movement it is ignored.
+- `active_x_*` / `active_y_*` - the portion of the frame used as a tablet.
+- `min_cutoff` / `beta` - One Euro filter: low `min_cutoff` = smoother, high
+  `beta` = less latency on fast movements.
 
-## Note
+## Notes
 
-- Serve luce decente: al buio la webcam abbassa il frame rate e il tracking
-  diventa scattoso. Il programma chiede esplicitamente 30 fps alla webcam,
-  che di default su molti modelli restano 10.
-- Una sola mano alla volta (`num_hands=1`), la piu' evidente nell'inquadratura.
-- L'immagine e' a specchio: muovi la mano a destra, il cursore va a destra.
-  Con `--no-mirror` si inverte.
+- Decent light is needed: in the dark the webcam drops its frame rate and the
+  tracking gets choppy. The program explicitly asks the webcam for 30 fps, which
+  on many models would otherwise stay at 10.
+- One hand at a time (`num_hands=1`), the most prominent one in frame.
+- The image is mirrored: move your hand right, the cursor goes right. Use
+  `--no-mirror` to invert it.
 
-## Come e' fatto
+## How it works
 
-Il lavoro pesante â€” trovare la mano e i suoi 21 punti in ogni fotogramma â€” lo fa
-il modello **HandLandmarker** di MediaPipe, che gira in locale sulla CPU. Tutto
-il resto e' codice di questo repository: interpretare quei punti come dita
-aperte, pinch e movimenti, e tradurli in comandi per Windows.
+The heavy lifting - finding the hand and its 21 landmarks in every frame - is
+done by MediaPipe's **HandLandmarker** model, which runs locally on the CPU.
+Everything else is code from this repository: interpreting those points as open
+fingers, pinches and movements, and translating them into Windows commands.
 
-La catena, fotogramma per fotogramma:
+The chain, frame by frame:
 
-1. **OpenCV** legge il frame dalla webcam (DirectShow) e lo specchia.
-2. **MediaPipe HandLandmarker** (Tasks API, modalita' VIDEO) restituisce i 21
-   landmark normalizzati della mano.
-3. [hand.py](airtouch/hand.py) li riduce a grandezze indipendenti da distanza e
-   rotazione: dita estese (confronto di distanze dal polso, non della sola
-   coordinata verticale), distanze di pinch divise per la dimensione della mano,
-   punti di riferimento del palmo.
-4. [gestures.py](airtouch/gestures.py) e' la macchina a stati: isteresi sui
-   pinch, finestra temporale per gli swipe, blocco d'asse per le due dita,
-   aggancio adattivo del cursore.
-5. Il **filtro One Euro** ([filters.py](airtouch/filters.py)) smorza il
-   tremolio senza aggiungere latenza sui movimenti veloci.
-6. [actions.py](airtouch/actions.py) esegue: **pynput** per cursore, click,
-   rotella e per le combinazioni di tasti, compresi i tasti multimediali.
+1. **OpenCV** reads the frame from the webcam (DirectShow) and mirrors it.
+2. **MediaPipe HandLandmarker** (Tasks API, VIDEO mode) returns the 21
+   normalised hand landmarks.
+3. [hand.py](airtouch/hand.py) reduces them to quantities independent of
+   distance and rotation: extended fingers (comparing distances from the wrist,
+   not the vertical coordinate alone), pinch distances divided by the hand size,
+   palm reference points.
+4. [gestures.py](airtouch/gestures.py) is the state machine: hysteresis on the
+   pinches, time window for the swipes, axis lock for the two fingers, adaptive
+   cursor anchoring.
+5. The **One Euro filter** ([filters.py](airtouch/filters.py)) damps the jitter
+   without adding latency on fast movements.
+6. [actions.py](airtouch/actions.py) executes: **pynput** for the cursor,
+   clicks, wheel and key combinations, media keys included.
 
-Il codice e' stato scritto con **Claude Code** (Anthropic), in un percorso a piu'
-passaggi: prima il controllo del mouse, poi la configurazione via JSON, poi la
-stabilizzazione del cursore durante i click. Le scelte non banali (soglie in
-"mani" invece che in pixel, aggancio relativo invece che assoluto, disambiguazione
-dei pinch a favore del piu' stretto) sono nate da problemi concreti emersi
-provando, e sono annotate nei commenti dove contano.
+The code was written with **Claude Code** (Anthropic), in several passes: first
+the mouse control, then the JSON configuration, then the cursor stabilisation
+during clicks. The non-obvious choices (thresholds in "hands" rather than
+pixels, relative instead of absolute anchoring, pinch disambiguation in favour
+of the tightest one) came out of concrete problems found while testing, and are
+annotated in the comments where they matter.
 
-## Credits e licenze
+## Credits and licences
 
-Questo progetto e' un assemblaggio di componenti di terzi. Il merito del
-riconoscimento della mano e' interamente di MediaPipe.
+This project is an assembly of third-party components. The credit for the hand
+recognition goes entirely to MediaPipe.
 
-| Componente | Autore | Licenza | Ruolo |
+| Component | Author | Licence | Role |
 |---|---|---|---|
-| [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Google | Apache 2.0 | Rilevamento della mano e dei 21 landmark |
-| Modello `hand_landmarker.task` | Google | Apache 2.0 | Pesi del rilevatore, scaricati da `storage.googleapis.com/mediapipe-models` |
-| [OpenCV](https://opencv.org/) (`opencv-python`) | OpenCV team | Apache 2.0 | Cattura webcam e finestra di anteprima |
-| [pynput](https://github.com/moses-palmer/pynput) | Moses PalmÃ©r | LGPL v3 | Controllo di mouse e tastiera, hotkey globali |
-| [NumPy](https://numpy.org/) | NumPy developers | BSD 3-Clause | Base numerica (dipendenza di OpenCV e MediaPipe) |
+| [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Google | Apache 2.0 | Hand detection and the 21 landmarks |
+| `hand_landmarker.task` model | Google | Apache 2.0 | Detector weights, downloaded from `storage.googleapis.com/mediapipe-models` |
+| [OpenCV](https://opencv.org/) (`opencv-python`) | OpenCV team | Apache 2.0 | Webcam capture and preview window |
+| [pynput](https://github.com/moses-palmer/pynput) | Moses Palmér | LGPL v3 | Mouse and keyboard control, global hotkeys |
+| [NumPy](https://numpy.org/) | NumPy developers | BSD 3-Clause | Numerical foundation (dependency of OpenCV and MediaPipe) |
 
-L'algoritmo di smoothing e' il **1â‚¬ (One Euro) Filter**, reimplementato qui a
-partire dalla descrizione dell'articolo originale:
+The smoothing algorithm is the **1€ (One Euro) Filter**, reimplemented here from
+the description in the original paper:
 
-> GÃ©ry Casiez, Nicolas Roussel, Daniel Vogel.
-> *1â‚¬ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in
-> Interactive Systems.* CHI 2012, pp. 2527â€“2530.
+> Géry Casiez, Nicolas Roussel, Daniel Vogel.
+> *1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in
+> Interactive Systems.* CHI 2012, pp. 2527-2530.
 > <https://gery.casiez.net/1euro/>
 
-Il modello di MediaPipe viene scaricato a runtime e **non** e' incluso nel
-repository (vedi [.gitignore](.gitignore)); vale la licenza Apache 2.0 di Google.
-Attenzione alla licenza di pynput: e' **LGPL v3**, quindi piu' vincolante delle
-altre se un giorno questo codice venisse ridistribuito.
+The MediaPipe model is downloaded at runtime and is **not** included in the
+repository (see [.gitignore](.gitignore)); Google's Apache 2.0 licence applies.
+Mind pynput's licence: it is **LGPL v3**, so more restrictive than the others
+should this code ever be redistributed.
 
-Codice scritto con l'assistenza di **Claude Code** (Anthropic).
+Code written with the assistance of **Claude Code** (Anthropic).

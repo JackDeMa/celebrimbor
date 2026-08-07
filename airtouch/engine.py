@@ -1,4 +1,4 @@
-"""Collega il riconoscitore di gesti alle azioni configurate nel JSON."""
+"""Connects the gesture recogniser to the actions configured in the JSON."""
 
 from dataclasses import dataclass, field
 
@@ -10,7 +10,7 @@ from .gestures import GestureRecognizer, Recognition
 
 @dataclass
 class EngineState:
-    """Fotografia dello stato corrente, per l'HUD e per il log su console."""
+    """Snapshot of the current state, for the HUD and the console log."""
 
     mode: str = "NO HAND"
     detail: str = ""
@@ -43,7 +43,7 @@ class GestureEngine:
             self.reset()
 
     def reset(self) -> None:
-        """Riporta tutto a riposo: nessun tasto premuto, filtri azzerati."""
+        """Bring everything back to rest: no key held, filters cleared."""
         for event in self.recognizer.reset():
             self._dispatch(event)
         for action in self.bindings.values():
@@ -54,8 +54,8 @@ class GestureEngine:
     def update(self, feats, t: float) -> EngineState:
         if not self.enabled:
             return EngineState(
-                mode="PAUSA",
-                detail="Ctrl+Alt+P per riattivare",
+                mode="PAUSED",
+                detail="Ctrl+Alt+P to resume",
                 pinches=feats.pinches if feats else {},
             )
 

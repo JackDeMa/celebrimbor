@@ -1,35 +1,35 @@
 {
-  // Configurazione dei gesti di AirTouch.
-  // Le righe che iniziano con // sono commenti (estensione locale a JSON).
-  // Elenco completo di gesti e azioni: python main.py --list-gestures
+  // AirTouch gesture configuration.
+  // Lines starting with // are comments (local extension to JSON).
+  // Full list of gestures and actions: python main.py --list-gestures
 
-  // Sovrascrive i parametri di airtouch/config.py. Lascia {} per i default.
+  // Overrides the parameters in airtouch/config.py. Leave {} for the defaults.
   "settings": {
     "fist_hold_seconds": 5.0,
     "swipe_min_travel": 1.1,
     "drag_hold": 0.45
   },
 
-  // Gesto -> azione. Metti "none" per disattivare un gesto.
+  // Gesture -> action. Use "none" to disable a gesture.
   "bindings": {
-    // --- mano che punta ---
-    // I pinch non collegati qui non vengono nemmeno valutati: "pinch_ring_tap"
-    // e' disponibile ma inattivo, aggiungilo se ti serve un terzo click.
+    // --- pointing hand ---
+    // Pinches not bound here are not even evaluated: "pinch_ring_tap" is
+    // available but inactive, add it if you need a third click.
     "point_move": "move_cursor",
     "pinch_index_tap": "left_click",
     "pinch_index_hold": "drag",
     "pinch_middle_tap": "right_click",
 
-    // --- pugno chiuso che scatta in una direzione ---
+    // --- closed fist flicked in a direction ---
     "fist_swipe_left": "ctrl+win+left",
     "fist_swipe_right": "ctrl+win+right",
     "fist_swipe_up": "alt+tab",
     "fist_swipe_down": "alt+shift+tab",
 
-    // --- pugno chiuso e fermo per 5 secondi ---
+    // --- fist closed and still for 5 seconds ---
     "fist_hold": "play_pause",
 
-    // --- indice e medio aperti, mano che scorre ---
+    // --- index and middle finger open, hand sliding ---
     "two_finger_vertical": { "action": "scroll", "gain": 55 },
     "two_finger_horizontal": { "action": "volume", "gain": 14 }
   }

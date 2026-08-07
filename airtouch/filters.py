@@ -1,6 +1,6 @@
-"""Filtro One Euro: smorza il tremolio senza introdurre latenza sui movimenti rapidi.
+"""One Euro filter: damps jitter without adding latency on fast movements.
 
-Riferimento: Casiez, Roussel, Vogel - "1 Euro Filter" (CHI 2012).
+Reference: Casiez, Roussel, Vogel - "1 Euro Filter" (CHI 2012).
 """
 
 import math
@@ -24,7 +24,7 @@ class _LowPass:
 
 
 class OneEuroFilter:
-    """Filtra un singolo scalare campionato a intervalli irregolari."""
+    """Filters a single scalar sampled at irregular intervals."""
 
     def __init__(self, min_cutoff: float = 1.0, beta: float = 0.0, d_cutoff: float = 1.0):
         self.min_cutoff = min_cutoff
@@ -62,7 +62,7 @@ class OneEuroFilter:
 
 
 class PointFilter:
-    """Comodita': applica One Euro a una coppia (x, y)."""
+    """Convenience: applies One Euro to an (x, y) pair."""
 
     def __init__(self, min_cutoff: float, beta: float, d_cutoff: float):
         self._fx = OneEuroFilter(min_cutoff, beta, d_cutoff)

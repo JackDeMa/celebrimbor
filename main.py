@@ -1,4 +1,4 @@
-"""Punto di ingresso: python main.py [opzioni]."""
+"""Entry point: python main.py [options]."""
 
 import argparse
 import sys
@@ -12,53 +12,53 @@ from airtouch.gestures import GESTURE_KINDS
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="airtouch",
-        description="Controlla il mouse muovendo la mano davanti alla webcam.",
+        description="Control the mouse by moving your hand in front of the webcam.",
     )
     p.add_argument(
         "--config",
         default=None,
-        help=f"file dei gesti (default {bindings_mod.DEFAULT_PATH.name}, creato se manca)",
+        help=f"gesture file (default {bindings_mod.DEFAULT_PATH.name}, created if missing)",
     )
-    p.add_argument("--camera", type=int, default=None, help="indice webcam (default 0)")
-    p.add_argument("--width", type=int, default=None, help="larghezza di cattura")
-    p.add_argument("--height", type=int, default=None, help="altezza di cattura")
-    p.add_argument("--fps", type=int, default=None, help="fps richiesti alla webcam")
+    p.add_argument("--camera", type=int, default=None, help="webcam index (default 0)")
+    p.add_argument("--width", type=int, default=None, help="capture width")
+    p.add_argument("--height", type=int, default=None, help="capture height")
+    p.add_argument("--fps", type=int, default=None, help="fps requested from the webcam")
     p.add_argument(
-        "--no-preview", action="store_true", help="non mostrare la finestra di anteprima"
+        "--no-preview", action="store_true", help="do not show the preview window"
     )
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="riconosce i gesti senza toccare mouse e tastiera (utile per tarare)",
+        help="recognise gestures without touching mouse and keyboard (useful for tuning)",
     )
     p.add_argument(
-        "--no-mirror", action="store_true", help="disattiva l'immagine a specchio"
+        "--no-mirror", action="store_true", help="disable the mirrored image"
     )
     p.add_argument(
-        "--model", default=None, help="percorso di un hand_landmarker.task alternativo"
+        "--model", default=None, help="path to an alternative hand_landmarker.task"
     )
     p.add_argument(
         "--smoothing",
         type=float,
         default=None,
-        help="frequenza di taglio del filtro: piu' bassa = piu' fluido (default 1.2)",
+        help="filter cutoff frequency: lower = smoother (default 1.2)",
     )
     p.add_argument(
         "--sensitivity",
         type=float,
         default=None,
-        help="ampiezza dell'area attiva: >1 muovi meno la mano, <1 piu' precisione",
+        help="size of the active area: >1 move your hand less, <1 more precision",
     )
     p.add_argument(
         "--list-gestures",
         action="store_true",
-        help="elenca i gesti riconosciuti e le azioni disponibili, poi esce",
+        help="list the recognised gestures and the available actions, then exit",
     )
     return p
 
 
 def _scale_active_area(cfg: Config, sensitivity: float) -> None:
-    """Restringe (sensibilita' alta) o allarga (bassa) la zona attiva del frame."""
+    """Shrinks (high sensitivity) or widens (low) the active area of the frame."""
     factor = max(0.2, min(3.0, 1.0 / sensitivity))
     for lo, hi in (("active_x_min", "active_x_max"), ("active_y_min", "active_y_max")):
         a, b = getattr(cfg, lo), getattr(cfg, hi)
@@ -69,7 +69,7 @@ def _scale_active_area(cfg: Config, sensitivity: float) -> None:
 
 
 def apply_cli(cfg: Config, a: argparse.Namespace) -> None:
-    """Le opzioni da riga di comando hanno la precedenza sul JSON."""
+    """Command-line options take precedence over the JSON."""
     for arg, field in (
         ("camera", "camera_index"),
         ("width", "frame_width"),
@@ -93,15 +93,15 @@ def apply_cli(cfg: Config, a: argparse.Namespace) -> None:
 
 
 def print_reference() -> None:
-    print("Gesti riconosciuti (nome da usare in gestures.json):\n")
+    print("Recognised gestures (name to use in gestures.json):\n")
     for name, kind in GESTURE_KINDS.items():
-        print(f"  {name:<24} tipo: {kind}")
-    print("\nAzioni indicabili come stringa:\n")
+        print(f"  {name:<24} kind: {kind}")
+    print("\nActions usable as a string:\n")
     for alias in sorted(bindings_mod.ALIASES):
         print(f"  {alias}")
-    print("  <combinazione di tasti>   es. \"alt+tab\", \"ctrl+win+left\", \"play_pause\"")
-    print("\nAzioni in forma estesa: hotkey, scroll, volume, click, axis.")
-    print("Vedi il README per i parametri di ciascuna.")
+    print("  <key combination>   e.g. \"alt+tab\", \"ctrl+win+left\", \"play_pause\"")
+    print("\nActions in extended form: hotkey, scroll, volume, click, axis.")
+    print("See the README for the parameters of each one.")
 
 
 def main() -> int:
@@ -114,15 +114,15 @@ def main() -> int:
     try:
         binds, warnings = bindings_mod.load(a.config, cfg)
     except bindings_mod.ConfigError as exc:
-        print(f"Errore nella configurazione: {exc}")
+        print(f"Configuration error: {exc}")
         return 2
 
     apply_cli(cfg, a)
 
     for w in warnings:
-        print(f"Attenzione: {w}")
+        print(f"Warning: {w}")
     if not binds:
-        print("Nessun gesto collegato: controlla la sezione \"bindings\".")
+        print("No gesture bound: check the \"bindings\" section.")
 
     return AirTouchApp(cfg, binds).run()
 

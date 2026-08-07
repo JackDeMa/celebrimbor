@@ -1,12 +1,12 @@
-"""Estrazione delle feature geometriche dai 21 landmark di MediaPipe Hands.
+"""Geometric feature extraction from the 21 MediaPipe Hands landmarks.
 
-Indici dei landmark:
-    0  polso
-    4  punta pollice        3  IP pollice
-    8  punta indice         5  MCP indice     6  PIP indice
-    12 punta medio          9  MCP medio     10  PIP medio
-    16 punta anulare       13  MCP anulare   14  PIP anulare
-    20 punta mignolo       17  MCP mignolo   18  PIP mignolo
+Landmark indices:
+    0  wrist
+    4  thumb tip         3  thumb IP
+    8  index tip         5  index MCP     6  index PIP
+    12 middle tip        9  middle MCP   10  middle PIP
+    16 ring tip         13  ring MCP     14  ring PIP
+    20 pinky tip        17  pinky MCP    18  pinky PIP
 """
 
 from dataclasses import dataclass
@@ -19,8 +19,8 @@ MIDDLE_MCP, MIDDLE_PIP, MIDDLE_TIP = 9, 10, 12
 RING_PIP, RING_TIP = 14, 16
 PINKY_MCP, PINKY_PIP, PINKY_TIP = 17, 18, 20
 
-# Dita che possono fare pinch con il pollice, nell'ordine in cui compaiono
-# nell'anteprima.
+# Fingers that can pinch against the thumb, in the order they appear in the
+# preview window.
 PINCH_FINGERS = {"index": INDEX_TIP, "middle": MIDDLE_TIP, "ring": RING_TIP}
 
 Point = tuple[float, float]
@@ -32,22 +32,22 @@ def _dist(a: Point, b: Point) -> float:
 
 @dataclass
 class HandFeatures:
-    """Descrizione della mano indipendente da distanza e rotazione."""
+    """Description of the hand, independent of distance and rotation."""
 
     points: list[Point]
-    scale: float              # dimensione della mano (polso -> MCP medio)
+    scale: float              # hand size (wrist -> middle MCP)
     index_extended: bool
     middle_extended: bool
     ring_extended: bool
     pinky_extended: bool
     thumb_extended: bool
-    pinches: dict[str, float]  # "index"/"middle"/"ring" -> distanza dal pollice
-    index_point: Point        # punta dell'indice: preciso ma ballerino nei pinch
-    palm_point: Point         # centro del palmo (usato per swipe e assi)
-    palm_outer: Point         # bordo esterno del palmo, lato mignolo
+    pinches: dict[str, float]  # "index"/"middle"/"ring" -> distance from the thumb
+    index_point: Point        # index fingertip: precise but shaky during pinches
+    palm_point: Point         # palm centre (used for swipes and axes)
+    palm_outer: Point         # outer palm edge, pinky side
 
     def anchor(self, name: str) -> Point:
-        """Punto di riferimento alternativo all'indice, scelto da configurazione."""
+        """Alternative reference point to the index finger, chosen by config."""
         pts = self.points
         if name == "palm_outer":
             return self.palm_outer
@@ -84,21 +84,21 @@ class HandFeatures:
 
 
 def _finger_extended(pts: list[Point], tip: int, pip: int) -> bool:
-    """Dito esteso se la punta e' piu' lontana dal polso della falange media.
+    """A finger is extended if its tip is farther from the wrist than the PIP.
 
-    Confronto basato sulle distanze (non sulla sola coordinata y): funziona
-    anche con la mano ruotata o inclinata.
+    The comparison is based on distances (not on the y coordinate alone), so it
+    works with the hand rotated or tilted too.
     """
     wrist = pts[WRIST]
     return _dist(pts[tip], wrist) > _dist(pts[pip], wrist) * 1.06
 
 
 def extract(landmarks) -> HandFeatures:
-    """Converte i landmark normalizzati di MediaPipe in feature utilizzabili."""
+    """Convert MediaPipe's normalised landmarks into usable features."""
     pts: list[Point] = [(lm.x, lm.y) for lm in landmarks]
 
-    # Scala della mano: distanza polso -> base del medio. Non cambia quando le
-    # dita si chiudono, quindi e' un buon riferimento per normalizzare.
+    # Hand scale: wrist -> base of the middle finger. It does not change when
+    # the fingers close, which makes it a good normalisation reference.
     scale = _dist(pts[WRIST], pts[MIDDLE_MCP])
     if scale < 1e-6:
         scale = 1e-6
@@ -108,7 +108,7 @@ def extract(landmarks) -> HandFeatures:
     ring_ext = _finger_extended(pts, RING_TIP, RING_PIP)
     pinky_ext = _finger_extended(pts, PINKY_TIP, PINKY_PIP)
 
-    # Il pollice si apre lateralmente: lo si valuta rispetto alla base del mignolo.
+    # The thumb opens sideways: it is evaluated against the base of the pinky.
     pinky_mcp = pts[PINKY_MCP]
     thumb_ext = _dist(pts[THUMB_TIP], pinky_mcp) > _dist(pts[THUMB_IP], pinky_mcp) * 1.10
 
@@ -116,9 +116,9 @@ def extract(landmarks) -> HandFeatures:
         (pts[WRIST][0] + pts[INDEX_MCP][0] + pts[PINKY_MCP][0]) / 3.0,
         (pts[WRIST][1] + pts[INDEX_MCP][1] + pts[PINKY_MCP][1]) / 3.0,
     )
-    # Bordo esterno del palmo (lato mignolo, il "taglio" della mano): polso e
-    # base del mignolo non si spostano quando pollice, medio e anulare si
-    # chiudono per un pinch, a differenza della punta dell'indice.
+    # Outer palm edge (pinky side, the "karate chop" edge): wrist and pinky base
+    # do not move when thumb, middle and ring fingers close for a pinch, unlike
+    # the index fingertip.
     palm_outer = (
         (pts[WRIST][0] + pts[PINKY_MCP][0]) / 2.0,
         (pts[WRIST][1] + pts[PINKY_MCP][1]) / 2.0,
@@ -143,7 +143,7 @@ def extract(landmarks) -> HandFeatures:
 
 
 class Hysteresis:
-    """Interruttore con due soglie: evita il tremolio a cavallo della soglia."""
+    """Two-threshold switch: avoids flicker around the threshold."""
 
     def __init__(self, on_below: float, off_above: float):
         self.on_below = on_below
