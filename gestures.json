@@ -1,0 +1,36 @@
+{
+  // Configurazione dei gesti di AirTouch.
+  // Le righe che iniziano con // sono commenti (estensione locale a JSON).
+  // Elenco completo di gesti e azioni: python main.py --list-gestures
+
+  // Sovrascrive i parametri di airtouch/config.py. Lascia {} per i default.
+  "settings": {
+    "fist_hold_seconds": 5.0,
+    "swipe_min_travel": 1.1,
+    "drag_hold": 0.45
+  },
+
+  // Gesto -> azione. Metti "none" per disattivare un gesto.
+  "bindings": {
+    // --- mano che punta ---
+    // I pinch non collegati qui non vengono nemmeno valutati: "pinch_ring_tap"
+    // e' disponibile ma inattivo, aggiungilo se ti serve un terzo click.
+    "point_move": "move_cursor",
+    "pinch_index_tap": "left_click",
+    "pinch_index_hold": "drag",
+    "pinch_middle_tap": "right_click",
+
+    // --- pugno chiuso che scatta in una direzione ---
+    "fist_swipe_left": "ctrl+win+left",
+    "fist_swipe_right": "ctrl+win+right",
+    "fist_swipe_up": "alt+tab",
+    "fist_swipe_down": "alt+shift+tab",
+
+    // --- pugno chiuso e fermo per 5 secondi ---
+    "fist_hold": "play_pause",
+
+    // --- indice e medio aperti, mano che scorre ---
+    "two_finger_vertical": { "action": "scroll", "gain": 55 },
+    "two_finger_horizontal": { "action": "volume", "gain": 14 }
+  }
+}
