@@ -313,8 +313,11 @@ annotated in the comments where they matter.
 
 ## Credits and licences
 
-This project is an assembly of third-party components. The credit for the hand
-recognition goes entirely to MediaPipe.
+The code in this repository is released under the **MIT** licence: see
+[LICENSE](LICENSE).
+
+Beyond that, the project is an assembly of third-party components, each keeping
+its own licence. The credit for the hand recognition goes entirely to MediaPipe.
 
 | Component | Author | Licence | Role |
 |---|---|---|---|
@@ -334,7 +337,9 @@ the description in the original paper:
 
 The MediaPipe model is downloaded at runtime and is **not** included in the
 repository (see [.gitignore](.gitignore)); Google's Apache 2.0 licence applies.
-Mind pynput's licence: it is **LGPL v3**, so more restrictive than the others
-should this code ever be redistributed.
+Mind pynput's licence: it is **LGPL v3**. Installed from pip, as it is here, it
+imposes nothing on this project; but bundling it inside a frozen executable
+(PyInstaller and the like) does trigger the LGPL obligations, which require
+leaving the user a way to swap the library out.
 
 Code written with the assistance of **Claude Code** (Anthropic).
