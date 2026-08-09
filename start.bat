@@ -1,5 +1,5 @@
 @echo off
-REM Starts AirTouch, creating the venv and installing the dependencies the first time.
+REM Starts Celebrimbor, creating the venv and installing the dependencies the first time.
 setlocal
 cd /d "%~dp0"
 

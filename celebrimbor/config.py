@@ -16,6 +16,13 @@ class Config:
 
     # --- hand detection ---
     model_path: str | None = None  # None = default model under models/
+    # Two hands tracked at once, each with its own bindings (sections "left"
+    # and "right" in gestures.json). Set to 1 to track a single hand: it costs
+    # a little less CPU, and the hand still lands in its own slot.
+    num_hands: int = 2
+    # Hand holding the pointer when both are in frame. On its own, either hand
+    # drives the cursor. Ctrl+Alt+Space swaps it while the program is running.
+    dominant_hand: str = "right"  # right | left
     # High threshold: a false detection would send the cursor flying.
     min_detection_confidence: float = 0.75
     min_tracking_confidence: float = 0.5

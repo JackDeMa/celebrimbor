@@ -1,7 +1,11 @@
-"""Loading gestures.json: gesture -> action.
+"""Loading gestures.json: gesture -> action, one set per hand.
 
 The file accepts comments on lines starting with `//`, which JSON does not
 support but which keep the configuration readable.
+
+The "bindings" section applies to both hands; the "left" and "right" sections
+add to it or override it for one hand only, with "none" to switch a gesture off
+on that side.
 """
 
 import json
@@ -11,21 +15,23 @@ from pathlib import Path
 from .actions import Action, Click, Drag, Hotkey, MoveCursor, NoAction, RepeatAxis, Scroll
 from .config import Config
 from .gestures import GESTURE_KINDS
+from .hand import HAND_SLOTS
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "gestures.json"
 
 DEFAULT_TEXT = """{
-  // AirTouch gesture configuration.
+  // Celebrimbor gesture configuration.
   // Lines starting with // are comments (local extension to JSON).
 
-  // Overrides the parameters in airtouch/config.py. Leave {} for the defaults.
+  // Overrides the parameters in celebrimbor/config.py. Leave {} for the defaults.
   "settings": {
     "fist_hold_seconds": 5.0,
     "swipe_min_travel": 1.1,
-    "drag_hold": 0.45
+    "drag_hold": 0.45,
+    "dominant_hand": "right"
   },
 
-  // Gesture -> action. Use "none" to disable a gesture.
+  // Gesture -> action, for both hands. Use "none" to disable a gesture.
   "bindings": {
     // --- pointing hand ---
     "point_move": "move_cursor",
@@ -49,7 +55,17 @@ DEFAULT_TEXT = """{
     // --- index and middle finger open, hand turned like a key ---
     "two_finger_rotate_cw": "volume_up",
     "two_finger_rotate_ccw": "volume_down"
-  }
+  },
+
+  // Per-hand overrides, laid on top of "bindings". Both hands get the whole set
+  // above, so either one can drive the mouse when it is alone in frame; with
+  // both in view the pointer goes to the dominant hand ("dominant_hand" in
+  // settings, Ctrl+Alt+Space to swap it on the fly).
+  // Use these two sections to specialise one hand, e.g. "pinch_index_tap":
+  // "none" on the left to make sure only the right one ever clicks.
+  "left": {},
+
+  "right": {}
 }
 """
 
@@ -164,24 +180,11 @@ def apply_settings(cfg: Config, settings: dict) -> list[str]:
     return warnings
 
 
-def load(path: Path | str | None, cfg: Config) -> tuple[dict[str, Action], list[str]]:
-    """Load the file (creating it if missing) and return (bindings, warnings)."""
-    path = Path(path) if path else DEFAULT_PATH
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(DEFAULT_TEXT, encoding="utf-8")
-        print(f"Created {path} with the default configuration.")
-
-    raw = strip_comments(path.read_text(encoding="utf-8"))
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ConfigError(f"{path}: invalid JSON at line {exc.lineno}: {exc.msg}") from exc
-
-    warnings = apply_settings(cfg, data.get("settings") or {})
-
+def build_bindings(specs: dict) -> tuple[dict[str, Action], list[str]]:
+    """Turn one hand's gesture -> spec mapping into gesture -> action."""
     bindings: dict[str, Action] = {}
-    for name, spec in (data.get("bindings") or {}).items():
+    warnings: list[str] = []
+    for name, spec in specs.items():
         kind = GESTURE_KINDS.get(name)
         if kind is None:
             warnings.append(
@@ -200,6 +203,47 @@ def load(path: Path | str | None, cfg: Config) -> tuple[dict[str, Action], list[
                 f"'{action.label}' does not support it, ignored"
             )
             continue
+        # "none" leaves no entry behind: a gesture nobody listens to is not
+        # even evaluated by the recogniser, and cannot claim the cursor.
+        if isinstance(action, NoAction):
+            continue
         bindings[name] = action
+    return bindings, warnings
+
+
+def load(
+    path: Path | str | None, cfg: Config
+) -> tuple[dict[str, dict[str, Action]], list[str]]:
+    """Load the file (creating it if missing) and return (bindings, warnings).
+
+    The bindings come back one set per hand, with fresh Action objects on each
+    side: several actions hold state and the two hands must not share it.
+    """
+    path = Path(path) if path else DEFAULT_PATH
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(DEFAULT_TEXT, encoding="utf-8")
+        print(f"Created {path} with the default configuration.")
+
+    raw = strip_comments(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"{path}: invalid JSON at line {exc.lineno}: {exc.msg}") from exc
+
+    warnings = apply_settings(cfg, data.get("settings") or {})
+
+    shared = data.get("bindings") or {}
+    bindings: dict[str, dict[str, Action]] = {}
+    seen = set(warnings)
+    for slot in HAND_SLOTS:
+        specs = {**shared, **(data.get(slot) or {})}
+        bindings[slot], hand_warnings = build_bindings(specs)
+        # The shared section is built once per hand, so its complaints would
+        # otherwise be printed twice.
+        for w in hand_warnings:
+            if w not in seen:
+                seen.add(w)
+                warnings.append(w)
 
     return bindings, warnings

@@ -23,6 +23,14 @@ PINKY_MCP, PINKY_PIP, PINKY_TIP = 17, 18, 20
 # preview window.
 PINCH_FINGERS = {"index": INDEX_TIP, "middle": MIDDLE_TIP, "ring": RING_TIP}
 
+# The two hands are tracked independently: each one has its own recogniser and
+# its own bindings. Names are from the user's point of view, not the camera's.
+HAND_SLOTS = ("left", "right")
+
+
+def other_hand(slot: str) -> str:
+    return "right" if slot == "left" else "left"
+
 Point = tuple[float, float]
 
 

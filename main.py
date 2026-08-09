@@ -3,15 +3,15 @@
 import argparse
 import sys
 
-from airtouch import bindings as bindings_mod
-from airtouch.app import AirTouchApp
-from airtouch.config import Config
-from airtouch.gestures import GESTURE_KINDS
+from celebrimbor import bindings as bindings_mod
+from celebrimbor.app import CelebrimborApp
+from celebrimbor.config import Config
+from celebrimbor.gestures import GESTURE_KINDS
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="airtouch",
+        prog="celebrimbor",
         description="Control the mouse by moving your hand in front of the webcam.",
     )
     p.add_argument(
@@ -20,6 +20,19 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"gesture file (default {bindings_mod.DEFAULT_PATH.name}, created if missing)",
     )
     p.add_argument("--camera", type=int, default=None, help="webcam index (default 0)")
+    p.add_argument(
+        "--hands",
+        type=int,
+        choices=(1, 2),
+        default=None,
+        help="how many hands to track at once (default 2)",
+    )
+    p.add_argument(
+        "--dominant",
+        choices=("left", "right"),
+        default=None,
+        help="hand holding the pointer when both are in frame (default right)",
+    )
     p.add_argument("--width", type=int, default=None, help="capture width")
     p.add_argument("--height", type=int, default=None, help="capture height")
     p.add_argument("--fps", type=int, default=None, help="fps requested from the webcam")
@@ -72,6 +85,8 @@ def apply_cli(cfg: Config, a: argparse.Namespace) -> None:
     """Command-line options take precedence over the JSON."""
     for arg, field in (
         ("camera", "camera_index"),
+        ("hands", "num_hands"),
+        ("dominant", "dominant_hand"),
         ("width", "frame_width"),
         ("height", "frame_height"),
         ("fps", "target_fps"),
@@ -102,6 +117,11 @@ def print_reference() -> None:
     print("  <key combination>   e.g. \"alt+tab\", \"ctrl+win+left\", \"play_pause\"")
     print("\nActions in extended form: hotkey, scroll, volume, click, axis.")
     print("See the README for the parameters of each one.")
+    print(
+        "\nBoth hands are tracked: \"bindings\" applies to both, the \"left\" and\n"
+        "\"right\" sections override it for one hand only (\"none\" to switch a\n"
+        "gesture off on that side)."
+    )
 
 
 def main() -> int:
@@ -121,10 +141,10 @@ def main() -> int:
 
     for w in warnings:
         print(f"Warning: {w}")
-    if not binds:
+    if not any(binds.values()):
         print("No gesture bound: check the \"bindings\" section.")
 
-    return AirTouchApp(cfg, binds).run()
+    return CelebrimborApp(cfg, binds).run()
 
 
 if __name__ == "__main__":

@@ -1,16 +1,17 @@
 {
-  // AirTouch gesture configuration.
+  // Celebrimbor gesture configuration.
   // Lines starting with // are comments (local extension to JSON).
   // Full list of gestures and actions: python main.py --list-gestures
 
-  // Overrides the parameters in airtouch/config.py. Leave {} for the defaults.
+  // Overrides the parameters in celebrimbor/config.py. Leave {} for the defaults.
   "settings": {
     "fist_hold_seconds": 5.0,
     "swipe_min_travel": 1.1,
-    "drag_hold": 0.45
+    "drag_hold": 0.45,
+    "dominant_hand": "right"
   },
 
-  // Gesture -> action. Use "none" to disable a gesture.
+  // Gesture -> action, for both hands. Use "none" to disable a gesture.
   "bindings": {
     // --- pointing hand ---
     // Pinches not bound here are not even evaluated: "pinch_ring_tap" is
@@ -39,5 +40,15 @@
     // you lower the fingers.
     "two_finger_rotate_cw": "volume_up",
     "two_finger_rotate_ccw": "volume_down"
-  }
+  },
+
+  // Per-hand overrides, laid on top of "bindings". Both hands get the whole set
+  // above, so either one can drive the mouse when it is alone in frame; with
+  // both in view the pointer goes to the dominant hand ("dominant_hand" in
+  // settings, Ctrl+Alt+Space to swap it on the fly).
+  // Use these two sections to specialise one hand, e.g. "pinch_index_tap":
+  // "none" on the left to make sure only the right one ever clicks.
+  "left": {},
+
+  "right": {}
 }

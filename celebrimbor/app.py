@@ -11,7 +11,7 @@ from .controller import MouseActuator
 from .detector import HAND_CONNECTIONS, HandDetector, ensure_model
 from .engine import EngineState, GestureEngine
 
-WINDOW = "AirTouch"
+WINDOW = "Celebrimbor"
 
 _GREEN = (120, 230, 120)
 _GREY = (170, 170, 170)
@@ -20,8 +20,8 @@ _YELLOW = (60, 220, 240)
 _WHITE = (245, 245, 245)
 
 
-class AirTouchApp:
-    def __init__(self, cfg: Config, bindings: dict | None = None):
+class CelebrimborApp:
+    def __init__(self, cfg: Config, bindings: dict[str, dict] | None = None):
         self.cfg = cfg
         self.mouse = MouseActuator(
             click_cooldown=cfg.click_cooldown, dry_run=cfg.dry_run
@@ -39,6 +39,7 @@ class AirTouchApp:
             {
                 "<ctrl>+<alt>+q": self.stop,
                 "<ctrl>+<alt>+p": self.toggle_pause,
+                "<ctrl>+<alt>+<space>": self.swap_dominant,
             }
         )
 
@@ -47,6 +48,13 @@ class AirTouchApp:
 
     def toggle_pause(self) -> None:
         self.engine.set_enabled(not self.engine.enabled)
+
+    def swap_dominant(self) -> None:
+        hand = self.engine.swap_dominant()
+        # The hotkey fires on the listener thread, so the notice is timestamped
+        # here rather than by the loop.
+        self._events.append((time.monotonic(), f"{hand[0].upper()} POINTER"))
+        print(f"Pointer to the {hand} hand.", flush=True)
 
     # --- main loop ----------------------------------------------------------
     def run(self) -> int:
@@ -58,13 +66,18 @@ class AirTouchApp:
 
         detector = HandDetector(
             model_path,
-            num_hands=1,
+            num_hands=max(1, min(2, self.cfg.num_hands)),
             min_detection_confidence=self.cfg.min_detection_confidence,
             min_tracking_confidence=self.cfg.min_tracking_confidence,
+            mirrored=self.cfg.mirror,
         )
         hotkeys = self._make_hotkeys()
         hotkeys.start()
-        print("AirTouch started. Ctrl+Alt+Q to quit, Ctrl+Alt+P to pause.")
+        print(
+            "Celebrimbor started. Ctrl+Alt+Q to quit, Ctrl+Alt+P to pause, "
+            "Ctrl+Alt+Space to move the pointer to the other hand."
+        )
+        print(f"Pointer on the {self.engine.dominant} hand.")
         if self.cfg.dry_run:
             print("DRY-RUN: gestures are recognised but the mouse does not move.")
 
@@ -81,21 +94,21 @@ class AirTouchApp:
 
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 now = time.monotonic()
-                landmarks = detector.detect(rgb, int(now * 1000))
+                hands = detector.detect(rgb, int(now * 1000))
 
                 dt = now - last_t
                 last_t = now
                 if dt > 0:
                     self._fps = 0.9 * self._fps + 0.1 * (1.0 / dt)
 
-                feats = hand.extract(landmarks) if landmarks else None
-                state = self.engine.update(feats, now)
-                self._record(state, now)
+                feats = {obs.slot: hand.extract(obs.landmarks) for obs in hands}
+                states = self.engine.update(feats, now)
+                self._record(states, now)
 
                 if not self.cfg.show_preview:
-                    self._log(state)
+                    self._log(states)
                 else:
-                    self._draw(frame, landmarks, state)
+                    self._draw(frame, hands, states)
                     cv2.imshow(WINDOW, frame)
                     if not self._handle_keys():
                         break
@@ -136,27 +149,34 @@ class AirTouchApp:
             self.toggle_pause()
         elif key == ord("h"):
             self.show_overlay = not self.show_overlay
+        elif key == ord("d"):
+            self.swap_dominant()
         return True
 
     # --- console (when the preview is disabled) -----------------------------
-    def _log(self, state: EngineState) -> None:
-        if state.mode != self._last_mode:
-            self._last_mode = state.mode
-            print(f"[{self._fps:4.1f} fps] {state.mode} {state.detail}".rstrip(), flush=True)
-        for ev in state.events:
-            print(f"  -> {ev}", flush=True)
+    def _log(self, states: list[EngineState]) -> None:
+        modes = "  ".join(f"{s.hand[0].upper()}:{s.mode}" for s in states)
+        if modes != self._last_mode:
+            self._last_mode = modes
+            details = "  ".join(s.detail for s in states if s.detail)
+            print(f"[{self._fps:4.1f} fps] {modes}  {details}".rstrip(), flush=True)
+        for state in states:
+            for ev in state.events:
+                print(f"  -> [{state.hand[0].upper()}] {ev}", flush=True)
 
     # --- HUD -----------------------------------------------------------------
-    def _record(self, state: EngineState, now: float) -> None:
-        for ev in state.events:
-            self._events.append((now, ev))
+    def _record(self, states: list[EngineState], now: float) -> None:
+        for state in states:
+            for ev in state.events:
+                self._events.append((now, f"{state.hand[0].upper()} {ev}"))
         self._events = [(t, e) for t, e in self._events if now - t < 1.2]
 
-    def _draw(self, frame, landmarks, state: EngineState) -> None:
+    def _draw(self, frame, hands, states: list[EngineState]) -> None:
         h, w = frame.shape[:2]
 
-        if landmarks is not None and self.show_overlay:
-            self._draw_hand(frame, landmarks, w, h)
+        if self.show_overlay:
+            for obs in hands:
+                self._draw_hand(frame, obs.landmarks, w, h)
 
         c = self.cfg
         cv2.rectangle(
@@ -169,38 +189,79 @@ class AirTouchApp:
 
         # The point actually driving the cursor: during a pinch it moves from
         # the index finger to the palm, and you can see it here.
-        if state.ref_point is not None:
+        for state in states:
+            if state.ref_point is None:
+                continue
             rp = (int(state.ref_point[0] * w), int(state.ref_point[1] * h))
             anchored = state.cursor_source == "palm"
             cv2.circle(frame, rp, 11, _RED if anchored else _GREEN, 2)
             cv2.circle(frame, rp, 2, _RED if anchored else _GREEN, -1)
 
-        color = _RED if not self.engine.enabled else _GREEN
-        cv2.rectangle(frame, (0, 0), (w, 34), (25, 25, 25), -1)
-        cv2.putText(frame, state.mode, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        detail = state.detail
-        if state.cursor_source:
-            detail = f"[{state.cursor_source}] {detail}".rstrip()
-        if detail:
+        self._draw_header(frame, w, states)
+
+        # One column of readouts per hand, on its own side of the frame: the
+        # left hand is the one on the left of the mirrored image.
+        for state in states:
+            x = 10 if state.hand == "left" else w // 2
+            self._draw_readouts(frame, state, x, h)
+
+        for i, (_, ev) in enumerate(reversed(self._events[-3:])):
             cv2.putText(
-                frame, detail, (200, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _GREY, 1
+                frame, ev, (w - 200, 90 + i * 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, _YELLOW, 2
             )
+
+        cv2.putText(
+            frame,
+            "q=quit  p=pause  h=overlay  d=pointer hand  |  Ctrl+Alt+Q/P/Space",
+            (10, h - 12),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            _GREY,
+            1,
+        )
         if self.cfg.dry_run:
             cv2.putText(
-                frame, "DRY-RUN", (w - 200, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.6, _YELLOW, 2
+                frame, "DRY-RUN", (w - 180, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _YELLOW, 2
             )
         cv2.putText(
             frame,
             f"{self._fps:4.1f} fps",
-            (w - 95, 23),
+            (w - 85, h - 12),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            0.45,
             _GREY,
             1,
         )
 
-        # pinch bars: the red tick is the click threshold, the grey one is the
-        # point where the cursor anchors to the palm
+    def _draw_header(self, frame, w: int, states: list[EngineState]) -> None:
+        """Two rows: the mode of each hand, and underneath its detail."""
+        color = _GREEN if self.engine.enabled else _RED
+        cv2.rectangle(frame, (0, 0), (w, 56), (25, 25, 25), -1)
+        for state in states:
+            x = 10 if state.hand == "left" else w // 2
+            # The dot marks the hand holding the pointer when both are in view.
+            initial = state.hand[0].upper()
+            marker = "*" if state.hand == self.engine.dominant else " "
+            faded = state.mode == "NO HAND"
+            cv2.putText(
+                frame,
+                f"{initial}{marker} {state.mode}",
+                (x, 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                _GREY if faded else color,
+                2,
+            )
+            detail = state.detail
+            if state.cursor_source:
+                detail = f"[{state.cursor_source}] {detail}".rstrip()
+            if detail:
+                cv2.putText(
+                    frame, detail, (x, 47), cv2.FONT_HERSHEY_SIMPLEX, 0.42, _GREY, 1
+                )
+
+    def _draw_readouts(self, frame, state: EngineState, x: int, h: int) -> None:
+        """Pinch bars and still-fist progress of one hand, in its own column."""
         labels = {"index": "IDX", "middle": "MID", "ring": "RNG"}
         shown = [f for f in labels if f in state.pinches]
         for i, finger in enumerate(shown):
@@ -209,27 +270,15 @@ class AirTouchApp:
                 frame,
                 labels[finger],
                 state.pinches[finger],
+                x,
                 y,
                 anchor_at=state.anchor_at.get(finger),
             )
 
         if state.fist_hold_progress > 0.0:
-            self._progress(frame, "FIST STILL", state.fist_hold_progress, h - 40 - 22 * len(shown))
-
-        for i, (_, ev) in enumerate(reversed(self._events[-3:])):
-            cv2.putText(
-                frame, ev, (w - 200, 62 + i * 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, _YELLOW, 2
+            self._progress(
+                frame, "FIST STILL", state.fist_hold_progress, x, h - 40 - 22 * len(shown)
             )
-
-        cv2.putText(
-            frame,
-            "q=quit  p=pause  h=overlay  |  Ctrl+Alt+Q, Ctrl+Alt+P global",
-            (10, h - 12),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            _GREY,
-            1,
-        )
 
     def _draw_hand(self, frame, landmarks, w: int, h: int) -> None:
         pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
@@ -240,8 +289,8 @@ class AirTouchApp:
             highlight = i in (hand.THUMB_TIP, hand.INDEX_TIP, hand.MIDDLE_TIP, hand.RING_TIP)
             cv2.circle(frame, p, 6 if highlight else 3, _YELLOW if highlight else _GREEN, -1)
 
-    def _progress(self, frame, label: str, ratio: float, y: int) -> None:
-        x0, width = 50, 160
+    def _progress(self, frame, label: str, ratio: float, x: int, y: int) -> None:
+        x0, width = x + 40, 160
         cv2.putText(frame, label, (x0, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, _GREY, 1)
         cv2.rectangle(frame, (x0, y), (x0 + width, y + 10), _GREY, 1)
         cv2.rectangle(
@@ -253,13 +302,19 @@ class AirTouchApp:
         )
 
     def _bar(
-        self, frame, label: str, value: float, y: int, anchor_at: float | None = None
+        self,
+        frame,
+        label: str,
+        value: float,
+        x: int,
+        y: int,
+        anchor_at: float | None = None,
     ) -> None:
         full = 1.2  # full-scale value of the bar
         ratio = min(max(value / full, 0.0), 1.0)
-        x0, width = 50, 110
+        x0, width = x + 40, 110
         active = value < self.cfg.pinch_on
-        cv2.putText(frame, label, (10, y + 11), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _GREY, 1)
+        cv2.putText(frame, label, (x, y + 11), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _GREY, 1)
         cv2.rectangle(frame, (x0, y), (x0 + width, y + 12), _GREY, 1)
         cv2.rectangle(
             frame,

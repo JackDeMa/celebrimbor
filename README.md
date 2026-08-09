@@ -1,14 +1,18 @@
-# AirTouch
+# Celebrimbor
 
-Control the mouse, the volume and Windows windows by moving your hand in front
-of the webcam.
+**Control your Windows PC with hand gestures and a webcam.**
+
+Move the mouse, the volume and the windows by moving your hand in front of the
+camera. Runs entirely on your machine: no account, no cloud, no extra hardware.
 
 Stack: **OpenCV** (capture) + **MediaPipe HandLandmarker** (21 hand landmarks) +
 **pynput** (real mouse and keyboard).
 
 Every gesture is bound to its action in [gestures.json](gestures.json):
 recognition and action are kept separate, so you can remap everything without
-touching the code.
+touching the code. **Both hands are tracked at once**, each with its own
+bindings: with both in frame the pointer stays on your dominant hand, and the
+other is free for the rest.
 
 ## Quick start
 
@@ -68,6 +72,52 @@ Practical notes:
   something else (or to `"none"`) if you would rather have that axis free.
 - After a swipe there is a 0.8 s pause, so `Alt+Tab` does not machine-gun.
 - The `FIST STILL` bar in the preview shows the progress towards the 5 seconds.
+- Every gesture is recognised on **both hands independently**: see below for how
+  to give each hand its own bindings.
+
+## Two hands at once
+
+The two hands are tracked separately and never share any state: a pinch on one
+hand cannot cancel a drag on the other, and each has its own smoothing filter,
+its own axis lock and its own copies of the actions.
+
+What they do share is the machine. There is only one cursor, so **only one hand
+at a time may move it**, otherwise the two would drag the pointer back and forth
+every frame. Who gets it:
+
+- **Both hands in frame** - the **dominant** hand holds the pointer, always. The
+  other one is free for everything else: scrolling, volume, swipes between
+  desktops.
+- **One hand in frame** - that one holds it, whichever it is. So you can point
+  with the hand you have free without changing any setting.
+- **Mid-drag** - the pointer is never taken away from a hand holding the mouse
+  button down. Bringing the other hand into frame while you drag would otherwise
+  fling whatever you are dragging across the screen.
+
+The dominant hand is the right one by default. Change it with `dominant_hand`
+in `settings`, with `--dominant left`, or **on the fly with `Ctrl+Alt+Space`**
+(the `d` key does the same with the preview focused). In the preview an
+asterisk next to `L` or `R` marks the hand currently holding the pointer.
+
+Both hands are bound to the whole gesture set by default, which is what lets
+either one take the pointer when it is alone. The `left` and `right` sections of
+[gestures.json](gestures.json) are laid on top of the shared `bindings` section
+and let you specialise one hand:
+
+```jsonc
+"bindings": { /* ... applies to both hands ... */ },
+
+// only the right hand ever clicks; the left one keeps scroll, volume and swipes
+"left":  { "pinch_index_tap": "none", "pinch_index_hold": "none" },
+"right": {}
+```
+
+The hands are named from **your** point of view, not the camera's: the mirrored
+image flips the model's own idea of which hand it is looking at, and the program
+flips it back (with `--no-mirror` there is nothing to flip).
+
+To go back to a single hand use `--hands 1` (or `"num_hands": 1` in `settings`):
+it costs a little less CPU, and either hand still works as the pointer.
 
 ## How the cursor stays put while you click
 
@@ -120,9 +170,14 @@ comments (local extension: plain JSON does not have them).
     "two_finger_horizontal": { "action": "volume", "gain": 14 },
     "two_finger_rotate_cw":  "volume_up",
     "two_finger_rotate_ccw": "volume_down"
-  }
+  },
+  "left":  { "point_move": "none" },
+  "right": {}
 }
 ```
+
+`bindings` applies to both hands; `left` and `right` override it for one hand
+only, with `"none"` to switch a gesture off on that side.
 
 An always up-to-date list of gestures and actions:
 
@@ -192,9 +247,11 @@ Every gesture has a kind, and only accepts compatible actions:
 |---|---|
 | `Ctrl+Alt+Q` | Quit (global, works even without window focus) |
 | `Ctrl+Alt+P` | Pause / resume control (global) |
+| `Ctrl+Alt+Space` | Move the pointer to the other hand (global) |
 | `q` or `Esc` | Quit (with the preview window focused) |
 | `p` | Pause |
 | `h` | Show/hide the hand skeleton |
+| `d` | Move the pointer to the other hand |
 
 The two global shortcuts are the escape hatch: if the cursor goes wild,
 `Ctrl+Alt+P` immediately hands control back to your real hand.
@@ -202,14 +259,19 @@ The two global shortcuts are the escape hatch: if the cursor goes wild,
 ## Command-line options
 
 ```
-main.py [--config gestures.json] [--camera 0] [--width 640] [--height 480]
-        [--fps 30] [--no-preview] [--no-mirror] [--dry-run]
+main.py [--config gestures.json] [--camera 0]
+        [--hands 2] [--dominant right]
+        [--width 640] [--height 480] [--fps 30]
+        [--no-preview] [--no-mirror] [--dry-run]
         [--smoothing 1.2] [--sensitivity 1.0] [--model PATH]
         [--list-gestures]
 ```
 
 Command-line options take precedence over the `settings` section of the JSON.
 
+- `--hands` - how many hands to track at once, 1 or 2 (default 2).
+- `--dominant` - which hand holds the pointer when both are in frame
+  (default `right`). `Ctrl+Alt+Space` swaps it while the program runs.
 - `--dry-run` - recognises gestures and shows everything, but does **not** touch
   the mouse and keyboard. Use it to tune the thresholds safely.
 - `--sensitivity` - > 1 shrinks the active area (you barely have to move your
@@ -219,12 +281,17 @@ Command-line options take precedence over the `settings` section of the JSON.
 
 ## Preview
 
-The window shows the hand skeleton, the rectangle of the **active area** (the
-portion of the frame mapped onto the whole screen), the current mode with the
-reference point in use, the fps, the `IDX` / `MID` / `RNG` bars with each pinch
-distance (red tick = click threshold, grey tick = palm anchoring threshold) and
-the `FIST STILL` bar while you hold your fist closed. Only the bars of pinches
-actually bound to an action are shown.
+The window shows the hand skeletons, the rectangle of the **active area** (the
+portion of the frame mapped onto the whole screen), the current mode of each
+hand with the reference point in use, the fps, the `IDX` / `MID` / `RNG` bars
+with each pinch distance (red tick = click threshold, grey tick = palm anchoring
+threshold) and the `FIST STILL` bar while you hold your fist closed. Only the
+bars of pinches actually bound to an action are shown.
+
+The readouts are split in two columns, `L` on the left and `R` on the right,
+each on the same side of the frame as its hand; an asterisk marks the hand
+holding the pointer. Recognised events are listed on the right with the initial
+of the hand that fired them.
 
 ## Structure
 
@@ -232,20 +299,20 @@ actually bound to an action are shown.
 |---|---|
 | [main.py](main.py) | Command line |
 | [gestures.json](gestures.json) | Gesture -> action mapping |
-| [airtouch/config.py](airtouch/config.py) | Thresholds and parameters |
-| [airtouch/detector.py](airtouch/detector.py) | MediaPipe Tasks + model download |
-| [airtouch/hand.py](airtouch/hand.py) | From the 21 landmarks to extended fingers / pinches |
-| [airtouch/gestures.py](airtouch/gestures.py) | Recognition: produces named events |
-| [airtouch/bindings.py](airtouch/bindings.py) | Reading and validating the JSON |
-| [airtouch/actions.py](airtouch/actions.py) | The runnable actions (clicks, keys, scroll) |
-| [airtouch/engine.py](airtouch/engine.py) | Connects events to actions |
-| [airtouch/controller.py](airtouch/controller.py) | The real mouse |
-| [airtouch/filters.py](airtouch/filters.py) | One Euro filter (anti-jitter) |
-| [airtouch/app.py](airtouch/app.py) | Webcam loop + preview |
+| [celebrimbor/config.py](celebrimbor/config.py) | Thresholds and parameters |
+| [celebrimbor/detector.py](celebrimbor/detector.py) | MediaPipe Tasks + model download |
+| [celebrimbor/hand.py](celebrimbor/hand.py) | From the 21 landmarks to extended fingers / pinches |
+| [celebrimbor/gestures.py](celebrimbor/gestures.py) | Recognition: produces named events |
+| [celebrimbor/bindings.py](celebrimbor/bindings.py) | Reading and validating the JSON |
+| [celebrimbor/actions.py](celebrimbor/actions.py) | The runnable actions (clicks, keys, scroll) |
+| [celebrimbor/engine.py](celebrimbor/engine.py) | Connects events to actions, one recogniser per hand |
+| [celebrimbor/controller.py](celebrimbor/controller.py) | The real mouse |
+| [celebrimbor/filters.py](celebrimbor/filters.py) | One Euro filter (anti-jitter) |
+| [celebrimbor/app.py](celebrimbor/app.py) | Webcam loop + preview |
 
 ## Tuning
 
-The thresholds live in [airtouch/config.py](airtouch/config.py) and can be
+The thresholds live in [celebrimbor/config.py](celebrimbor/config.py) and can be
 overridden from the `settings` section of the JSON:
 
 - `pinch_on` / `pinch_off` - how close the fingers must be for a click (double
@@ -267,6 +334,8 @@ overridden from the `settings` section of the JSON:
   pause afterwards. Together they set how fast the volume climbs: 20 degrees
   every 0.15 s at most. Raise `rotate_min_angle` if a rotation slips out while
   you are scrolling, lower it for a lighter turn of the wrist.
+- `num_hands` / `dominant_hand` - how many hands to track, and which one keeps
+  the pointer when both are in frame.
 - `active_x_*` / `active_y_*` - the portion of the frame used as a tablet.
 - `min_cutoff` / `beta` - One Euro filter: low `min_cutoff` = smoother, high
   `beta` = less latency on fast movements.
@@ -276,7 +345,9 @@ overridden from the `settings` section of the JSON:
 - Decent light is needed: in the dark the webcam drops its frame rate and the
   tracking gets choppy. The program explicitly asks the webcam for 30 fps, which
   on many models would otherwise stay at 10.
-- One hand at a time (`num_hands=1`), the most prominent one in frame.
+- Two hands at a time (`num_hands=2`), the most prominent ones in frame. Only
+  one of them can move the cursor at any moment: the dominant one when both are
+  up, otherwise whichever is in frame.
 - The image is mirrored: move your hand right, the cursor goes right. Use
   `--no-mirror` to invert it.
 
@@ -291,17 +362,18 @@ The chain, frame by frame:
 
 1. **OpenCV** reads the frame from the webcam (DirectShow) and mirrors it.
 2. **MediaPipe HandLandmarker** (Tasks API, VIDEO mode) returns the 21
-   normalised hand landmarks.
-3. [hand.py](airtouch/hand.py) reduces them to quantities independent of
+   normalised landmarks of each hand, plus which hand it is. When it labels both
+   of them the same way, the more confident one keeps its slot.
+3. [hand.py](celebrimbor/hand.py) reduces them to quantities independent of
    distance and rotation: extended fingers (comparing distances from the wrist,
    not the vertical coordinate alone), pinch distances divided by the hand size,
    palm reference points.
-4. [gestures.py](airtouch/gestures.py) is the state machine: hysteresis on the
-   pinches, time window for the swipes, axis lock for the two fingers, adaptive
-   cursor anchoring.
-5. The **One Euro filter** ([filters.py](airtouch/filters.py)) damps the jitter
+4. [gestures.py](celebrimbor/gestures.py) is the state machine, one instance per
+   hand: hysteresis on the pinches, time window for the swipes, axis lock for the
+   two fingers, adaptive cursor anchoring.
+5. The **One Euro filter** ([filters.py](celebrimbor/filters.py)) damps the jitter
    without adding latency on fast movements.
-6. [actions.py](airtouch/actions.py) executes: **pynput** for the cursor,
+6. [actions.py](celebrimbor/actions.py) executes: **pynput** for the cursor,
    clicks, wheel and key combinations, media keys included.
 
 The code was written with **Claude Code** (Anthropic), in several passes: first
@@ -343,3 +415,16 @@ imposes nothing on this project; but bundling it inside a frozen executable
 leaving the user a way to swap the library out.
 
 Code written with the assistance of **Claude Code** (Anthropic).
+
+## About the name
+
+**Celebrimbor** is Sindarin for *"Silver Hand"* - more literally *celeb* (silver)
++ *paur* (fist). He was the greatest smith of the Second Age, the one who forged
+the Three Rings, and who inscribed on the Doors of Durin a password that opens
+them without a touch.
+
+A hand, a fist, and a door that answers to a signal: it seemed the right name for
+a program that watches your hand and hands the commands to the machine.
+
+Tolkien's names and works belong to the Tolkien Estate; this project has no
+connection to it, nor to the video games that use the same character.
