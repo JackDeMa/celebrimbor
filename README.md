@@ -39,7 +39,7 @@ python -m venv .venv
 | Pinch **thumb + index**, short tap | `pinch_index_tap` | Left click |
 | Pinch **thumb + index** held > 0.45 s | `pinch_index_hold` | Drag |
 | Pinch **thumb + middle**, short tap | `pinch_middle_tap` | Right click |
-| Pinch **thumb + ring** | `pinch_ring_tap` / `_hold` | *(available, not bound)* |
+| Pinch **thumb + ring** | `pinch_ring_tap` / `_hold` | *(available, not bound - a good spot for `double_click`)* |
 | **Fist** flicked left | `fist_swipe_left` | `Ctrl+Win+Left` (previous desktop) |
 | **Fist** flicked right | `fist_swipe_right` | `Ctrl+Win+Right` (next desktop) |
 | **Fist** flicked up | `fist_swipe_up` | `Alt+Tab` |
@@ -118,6 +118,29 @@ flips it back (with `--no-mirror` there is nothing to flip).
 
 To go back to a single hand use `--hands 1` (or `"num_hands": 1` in `settings`):
 it costs a little less CPU, and either hand still works as the pointer.
+
+## Double click
+
+There is no double-click gesture, and there does not need to be: a real mouse
+has no such signal either. It sends two clicks and **Windows** decides, joining
+them if they land within its double-click time (500 ms by default,
+`GetDoubleClickTime`) and close enough together on screen. Pinching twice in a
+row does exactly that, and the cursor holds still between the two because it is
+anchored to the palm during a pinch (see below).
+
+The only thing in the way is `click_cooldown`, the guard against a single pinch
+firing twice: at 0.18 s it leaves the whole 180-500 ms range to pinch again,
+which is a comfortable double tap. Raise it if you get accidental repeats,
+lower it if the second pinch does not always register.
+
+If you would rather have a guaranteed double click, with no timing to hit, bind
+one to a gesture of its own - the ring pinch is free by default:
+
+```jsonc
+"pinch_ring_tap": "double_click"
+```
+
+That sends both clicks in one go, so Windows always reads them as a pair.
 
 ## How the cursor stays put while you click
 
@@ -252,6 +275,7 @@ Every gesture has a kind, and only accepts compatible actions:
 | `p` | Pause |
 | `h` | Show/hide the hand skeleton |
 | `d` | Move the pointer to the other hand |
+| `o` | Show/hide the always-on-top overlay |
 
 The two global shortcuts are the escape hatch: if the cursor goes wild,
 `Ctrl+Alt+P` immediately hands control back to your real hand.
@@ -262,7 +286,7 @@ The two global shortcuts are the escape hatch: if the cursor goes wild,
 main.py [--config gestures.json] [--camera 0]
         [--hands 2] [--dominant right]
         [--width 640] [--height 480] [--fps 30]
-        [--no-preview] [--no-mirror] [--dry-run]
+        [--no-preview] [--no-overlay] [--no-mirror] [--dry-run]
         [--smoothing 1.2] [--sensitivity 1.0] [--model PATH]
         [--list-gestures]
 ```
@@ -272,6 +296,7 @@ Command-line options take precedence over the `settings` section of the JSON.
 - `--hands` - how many hands to track at once, 1 or 2 (default 2).
 - `--dominant` - which hand holds the pointer when both are in frame
   (default `right`). `Ctrl+Alt+Space` swaps it while the program runs.
+- `--no-overlay` - do not show the always-on-top card (see above).
 - `--dry-run` - recognises gestures and shows everything, but does **not** touch
   the mouse and keyboard. Use it to tune the thresholds safely.
 - `--sensitivity` - > 1 shrinks the active area (you barely have to move your
@@ -293,6 +318,35 @@ each on the same side of the frame as its hand; an asterisk marks the hand
 holding the pointer. Recognised events are listed on the right with the initial
 of the hand that fired them.
 
+## Always-on-top overlay
+
+The preview window ends up behind whatever you are actually working in, which is
+exactly when you would want to know what the program thinks your hands are
+doing. So there is also a small card in the bottom-right corner of the screen,
+above every other window, with the mode of each hand and the last events:
+
+```
+L  TWO FINGERS
+R* POINTING
+────────────────
+R LEFT CLICK
+```
+
+It never takes part in the interaction it describes: **clicks go straight
+through it**, it never steals the keyboard focus and it stays out of `Alt+Tab`.
+The click-through is not cosmetic - a window that swallowed clicks would swallow
+the ones the program itself generates, right where the cursor is.
+
+Turn it off with `--no-overlay` (or `"overlay": false` in `settings`), or toggle
+it with the `o` key with the preview focused. It costs about 0.6 ms per frame,
+so it is not what limits the frame rate.
+
+Two limits are not ours to fix: a game in **exclusive fullscreen** covers every
+always-on-top window (borderless fullscreen is fine), and an unelevated process
+cannot draw over windows elevated by **UAC**, nor over the secure desktop (the
+UAC prompt itself, `Ctrl+Alt+Del`). Built on `tkinter` plus a few Win32 flags
+through `ctypes`, both from the standard library: no extra dependency.
+
 ## Structure
 
 | File | Role |
@@ -308,6 +362,7 @@ of the hand that fired them.
 | [celebrimbor/engine.py](celebrimbor/engine.py) | Connects events to actions, one recogniser per hand |
 | [celebrimbor/controller.py](celebrimbor/controller.py) | The real mouse |
 | [celebrimbor/filters.py](celebrimbor/filters.py) | One Euro filter (anti-jitter) |
+| [celebrimbor/overlay.py](celebrimbor/overlay.py) | Always-on-top click-through card |
 | [celebrimbor/app.py](celebrimbor/app.py) | Webcam loop + preview |
 
 ## Tuning
@@ -317,6 +372,9 @@ overridden from the `settings` section of the JSON:
 
 - `pinch_on` / `pinch_off` - how close the fingers must be for a click (double
   threshold: avoids flicker around the limit).
+- `click_cooldown` - the shortest gap between two clicks (0.18 s). It is what
+  makes double clicking possible, see below. Raise it if a single pinch ever
+  fires twice.
 - `drag_hold` - how long to hold the pinch before it becomes a drag.
 - `anchor_point` / `anchor_ratio_on` / `anchor_ratio_off` / `anchor_window` /
   `anchor_blend` - the cursor anchoring to the palm during a pinch (see above).

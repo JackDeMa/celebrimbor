@@ -53,12 +53,19 @@ class MouseActuator:
             self.mouse.position = (px, py)
 
     # --- click -----------------------------------------------------------
-    def click(self, button: Button = Button.left) -> bool:
+    def click(self, button: Button = Button.left, count: int = 1) -> bool:
+        """One gesture, one call: `count` clicks sent back to back.
+
+        The cooldown guards against two separate gestures firing in a row, not
+        against the clicks that make up a single deliberate one. Sending them
+        through pynput in one go is also what gets them close enough together
+        for Windows to read them as a double click.
+        """
         now = time.monotonic()
         if now - self._last_click < self.click_cooldown:
             return False
         if not self.dry_run:
-            self.mouse.click(button)
+            self.mouse.click(button, count)
         self._last_click = now
         return True
 

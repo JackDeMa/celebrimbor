@@ -165,9 +165,7 @@ class Click(Action):
         self.label = f"{button} click" + (f" x{count}" if count > 1 else "")
 
     def trigger(self, backend: Backend) -> str | None:
-        fired = False
-        for _ in range(self.count):
-            fired = backend.mouse.click(self.button) or fired
+        fired = backend.mouse.click(self.button, self.count)
         return self.label.upper() if fired else None
 
 

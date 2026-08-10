@@ -40,6 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-preview", action="store_true", help="do not show the preview window"
     )
     p.add_argument(
+        "--no-overlay",
+        action="store_true",
+        help="do not show the always-on-top card with the state of the hands",
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="recognise gestures without touching mouse and keyboard (useful for tuning)",
@@ -99,6 +104,8 @@ def apply_cli(cfg: Config, a: argparse.Namespace) -> None:
 
     if a.no_preview:
         cfg.show_preview = False
+    if a.no_overlay:
+        cfg.overlay = False
     if a.no_mirror:
         cfg.mirror = False
     if a.dry_run:

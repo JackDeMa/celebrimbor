@@ -38,6 +38,9 @@ DEFAULT_TEXT = """{
     "pinch_index_tap": "left_click",
     "pinch_index_hold": "drag",
     "pinch_middle_tap": "right_click",
+    // Two quick index pinches already work as a double click: Windows joins
+    // them itself. Uncomment for a guaranteed one, with no timing to hit.
+    // "pinch_ring_tap": "double_click",
 
     // --- closed fist flicked in a direction ---
     "fist_swipe_left": "ctrl+win+left",

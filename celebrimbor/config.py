@@ -45,7 +45,12 @@ class Config:
     pinch_off: float = 0.52   # above this threshold the pinch is open (hysteresis)
 
     # --- click and drag ---
-    click_cooldown: float = 0.30   # seconds between two consecutive clicks
+    # Seconds between two consecutive clicks. It is what makes a double click
+    # possible at all: Windows joins two clicks into one only if they arrive
+    # within its double-click time (500 ms by default), so a longer cooldown
+    # than this leaves almost no room to pinch twice in time. Raise it if a
+    # single pinch ever fires twice.
+    click_cooldown: float = 0.18
     drag_hold: float = 0.45        # pinch held longer than this -> drag
 
     # --- cursor anchoring during a pinch ---
@@ -91,5 +96,8 @@ class Config:
 
     # --- misc ---
     show_preview: bool = True
+    # Small always-on-top card with the state of both hands: unlike the preview
+    # window it stays visible over whatever app you are actually using.
+    overlay: bool = True
     dry_run: bool = False  # recognises gestures but never touches the real mouse
     grace_frames: int = 6  # frames without a hand tolerated before resetting state

@@ -5,7 +5,7 @@ import time
 import cv2
 from pynput import keyboard
 
-from . import hand
+from . import hand, overlay
 from .config import Config
 from .controller import MouseActuator
 from .detector import HAND_CONNECTIONS, HandDetector, ensure_model
@@ -28,7 +28,8 @@ class CelebrimborApp:
         )
         self.engine = GestureEngine(cfg, self.mouse, bindings)
         self.running = True
-        self.show_overlay = True
+        self.show_skeleton = True
+        self.overlay: overlay.Overlay | None = None
         self._fps = 0.0
         self._events: list[tuple[float, str]] = []
         self._last_mode = ""
@@ -56,6 +57,10 @@ class CelebrimborApp:
         self._events.append((time.monotonic(), f"{hand[0].upper()} POINTER"))
         print(f"Pointer to the {hand} hand.", flush=True)
 
+    def toggle_overlay(self) -> None:
+        if self.overlay is not None:
+            self.overlay.set_visible(not self.overlay.visible)
+
     # --- main loop ----------------------------------------------------------
     def run(self) -> int:
         model_path = ensure_model(self.cfg.model_path) if self.cfg.model_path else ensure_model()
@@ -71,6 +76,8 @@ class CelebrimborApp:
             min_tracking_confidence=self.cfg.min_tracking_confidence,
             mirrored=self.cfg.mirror,
         )
+        if self.cfg.overlay:
+            self.overlay = overlay.create()
         hotkeys = self._make_hotkeys()
         hotkeys.start()
         print(
@@ -105,6 +112,14 @@ class CelebrimborApp:
                 states = self.engine.update(feats, now)
                 self._record(states, now)
 
+                if self.overlay is not None:
+                    self.overlay.update(
+                        states,
+                        [e for _, e in self._events],
+                        self.engine.dominant,
+                        self.engine.enabled,
+                    )
+
                 if not self.cfg.show_preview:
                     self._log(states)
                 else:
@@ -122,6 +137,8 @@ class CelebrimborApp:
             detector.close()
             cap.release()
             cv2.destroyAllWindows()
+            if self.overlay is not None:
+                self.overlay.close()
         return 0
 
     # --- webcam -------------------------------------------------------------
@@ -148,9 +165,11 @@ class CelebrimborApp:
         if key == ord("p"):
             self.toggle_pause()
         elif key == ord("h"):
-            self.show_overlay = not self.show_overlay
+            self.show_skeleton = not self.show_skeleton
         elif key == ord("d"):
             self.swap_dominant()
+        elif key == ord("o"):
+            self.toggle_overlay()
         return True
 
     # --- console (when the preview is disabled) -----------------------------
@@ -174,7 +193,7 @@ class CelebrimborApp:
     def _draw(self, frame, hands, states: list[EngineState]) -> None:
         h, w = frame.shape[:2]
 
-        if self.show_overlay:
+        if self.show_skeleton:
             for obs in hands:
                 self._draw_hand(frame, obs.landmarks, w, h)
 
@@ -212,7 +231,7 @@ class CelebrimborApp:
 
         cv2.putText(
             frame,
-            "q=quit  p=pause  h=overlay  d=pointer hand  |  Ctrl+Alt+Q/P/Space",
+            "q=quit p=pause h=skeleton d=pointer o=overlay | Ctrl+Alt+Q/P/Space",
             (10, h - 12),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.4,
