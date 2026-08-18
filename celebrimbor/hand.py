@@ -23,6 +23,15 @@ PINKY_MCP, PINKY_PIP, PINKY_TIP = 17, 18, 20
 # preview window.
 PINCH_FINGERS = {"index": INDEX_TIP, "middle": MIDDLE_TIP, "ring": RING_TIP}
 
+# Fingertip of each finger, for the poses that draw slides and circles with
+# whatever they are holding out.
+FINGER_TIPS = {
+    "index": INDEX_TIP,
+    "middle": MIDDLE_TIP,
+    "ring": RING_TIP,
+    "pinky": PINKY_TIP,
+}
+
 # The two hands are tracked independently: each one has its own recogniser and
 # its own bindings. Names are from the user's point of view, not the camera's.
 HAND_SLOTS = ("left", "right")
@@ -69,19 +78,37 @@ class HandFeatures:
             return pts[WRIST]
         raise KeyError(name)
 
-    @property
-    def pointing_angle(self) -> float:
-        """Direction the index and middle fingers point at, in radians.
+    def tips_center(self, tips: tuple[int, ...]) -> Point:
+        """Midpoint of the given fingertips: the point a pose draws with."""
+        return (
+            sum(self.points[i][0] for i in tips) / len(tips),
+            sum(self.points[i][1] for i in tips) / len(tips),
+        )
 
-        Measured from the wrist to the midpoint of the two fingertips: a long
+    def pointing_angle(self, tips: tuple[int, ...]) -> float:
+        """Direction the extended fingers point at, in radians.
+
+        Measured from the wrist to the midpoint of the fingertips: a long
         lever, so the landmark jitter barely moves it. y grows downwards, so a
         growing angle is a clockwise rotation as seen in the preview window.
+
+        Used to tell a circle drawn in the air, where the fingers hold their
+        aim, from a hand simply turning on the spot, where they do not.
         """
-        pts = self.points
-        tip_x = (pts[INDEX_TIP][0] + pts[MIDDLE_TIP][0]) / 2.0
-        tip_y = (pts[INDEX_TIP][1] + pts[MIDDLE_TIP][1]) / 2.0
-        wrist = pts[WRIST]
+        tip_x, tip_y = self.tips_center(tips)
+        wrist = self.points[WRIST]
         return atan2(tip_y - wrist[1], tip_x - wrist[0])
+
+    @property
+    def extended(self) -> dict[str, bool]:
+        """Which fingers are held out, by name: what a pose is checked against."""
+        return {
+            "index": self.index_extended,
+            "middle": self.middle_extended,
+            "ring": self.ring_extended,
+            "pinky": self.pinky_extended,
+            "thumb": self.thumb_extended,
+        }
 
     @property
     def extended_count(self) -> int:

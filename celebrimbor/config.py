@@ -79,20 +79,46 @@ class Config:
     fist_still_travel: float = 0.20   # movement above which the fist is not still
     fist_hold_seconds: float = 5.0    # how long to hold the fist still
 
-    # --- two-finger gesture (index + middle) ---
+    # --- fingers held out (index + middle, or those two plus the ring) ---
+    # The two poses are the same gesture with one more finger out, and share
+    # every parameter below: only the actions they are bound to differ.
     axis_lock_travel: float = 0.025   # travel before the axis is picked
     axis_deadzone: float = 0.004      # per-frame movement below which we ignore
+    # The opening of a circle *is* a slide - no measurement can tell them apart
+    # before the path has come round far enough, a gentle arc being exactly what
+    # an arm sliding on its elbow draws. So the slide is not guessed at: for
+    # this long its movement is held back instead, and either a circle shows up
+    # and the lot is dropped, or it comes out in one go with nothing lost. It
+    # only costs this delay once, at the start of the gesture.
+    axis_lock_hold: float = 0.45
+    # Frames of broken pose tolerated before the gesture is really over. Without
+    # them a single frame reading a curled finger as extended - it happens, the
+    # finger sits right on the threshold - would wipe a half-drawn circle.
+    two_finger_grace: int = 4
 
-    # --- two-finger rotation (same pose, hand turned like a key) ---
-    # The rotation competes with the sliding for the axis lock: whichever
-    # crosses its own threshold first wins, and the other one stays quiet until
-    # the fingers are lowered.
-    # The angle is small and the pause short because the default binding is the
-    # volume: one step every 20 degrees turns the hand into a usable knob,
-    # whereas a wide angle would need half a turn per notch.
-    rotate_window: float = 0.6        # time window over which the turn is measured
-    rotate_min_angle: float = 20.0    # degrees of turn needed to fire
-    rotate_cooldown: float = 0.15     # pause after a recognised rotation
+    # --- circle (same poses, fingertips drawing a circle) ---
+    # The two fingers keep pointing the same way and the hand travels around a
+    # circle: it is the path that turns, not the hand. Radii are in "hands", so
+    # the circle does not have to grow when you sit further back.
+    circle_window: float = 2.0        # length of path kept under observation
+    circle_min_samples: int = 12      # too few points fit a circle to anything
+    circle_min_radius: float = 0.35   # below this it is hand tremor, not a circle
+    circle_max_radius: float = 2.0    # above this it is an arm sliding on its elbow
+    circle_tolerance: float = 0.18    # how far off the fitted circle the path may sit
+    # The one measurement that really separates a circle from a slide. Half a
+    # turn of a circle this small is a hand's worth of travel; half a turn of
+    # the arc an arm draws sliding sideways would take it out of the frame.
+    # It also sets the slowest circle that can be recognised at all: the arc has
+    # to fit inside `circle_window`, so about 5 seconds per turn.
+    circle_min_span: float = 150.0    # degrees of arc before it counts as a circle
+    circle_aim_drift: float = 40.0    # degrees the fingers may swing while circling
+    circle_step_angle: float = 90.0   # degrees of arc per event
+    # Steps swallowed before the first event. The span above already proves it
+    # is a circle, so these only set how long it takes to engage: the arc
+    # already drawn counts towards them, which puts the first event within a
+    # quarter turn of the circle being recognised.
+    circle_arm_steps: int = 2
+    circle_cooldown: float = 0.10     # pause after an event
 
     # --- misc ---
     show_preview: bool = True

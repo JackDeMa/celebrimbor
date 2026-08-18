@@ -76,6 +76,10 @@ class CelebrimborApp:
             min_tracking_confidence=self.cfg.min_tracking_confidence,
             mirrored=self.cfg.mirror,
         )
+        if self.cfg.show_preview:
+            # Created up front: the loop checks the window before showing a
+            # frame, and there has to be one to check.
+            cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
         if self.cfg.overlay:
             self.overlay = overlay.create()
         hotkeys = self._make_hotkeys()
@@ -123,11 +127,15 @@ class CelebrimborApp:
                 if not self.cfg.show_preview:
                     self._log(states)
                 else:
+                    # Before drawing, not after: the overlay's Tk pump drains the
+                    # whole thread message queue, close button included, so the
+                    # window can already be gone by the time we get here - and
+                    # imshow would silently build a new one, swallowing the X.
+                    if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
+                        break
                     self._draw(frame, hands, states)
                     cv2.imshow(WINDOW, frame)
                     if not self._handle_keys():
-                        break
-                    if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                         break
         except KeyboardInterrupt:
             pass

@@ -55,9 +55,19 @@ DEFAULT_TEXT = """{
     "two_finger_vertical": { "action": "scroll", "gain": 55 },
     "two_finger_horizontal": { "action": "volume", "gain": 14 },
 
-    // --- index and middle finger open, hand turned like a key ---
-    "two_finger_rotate_cw": "volume_up",
-    "two_finger_rotate_ccw": "volume_down"
+    // --- index and middle finger open, drawing a circle in the air ---
+    "two_finger_circle_cw": "volume_up",
+    "two_finger_circle_ccw": "volume_down",
+
+    // --- index, middle and ring finger open ---
+    // Same gesture as above with one more finger out, and its own actions.
+    // Leave a name out (or set it to "none") and that slide does nothing;
+    // unbind all four and the pose goes back to being just a hand in front of
+    // the camera, free to point and click.
+    "three_finger_vertical": { "action": "volume", "gain": 14 },
+    // "three_finger_horizontal": { "action": "axis", "positive": "ctrl+win+right", "negative": "ctrl+win+left", "gain": 3, "max_rate": 2 },
+    "three_finger_circle_cw": "next_track",
+    "three_finger_circle_ccw": "prev_track"
   },
 
   // Per-hand overrides, laid on top of "bindings". Both hands get the whole set

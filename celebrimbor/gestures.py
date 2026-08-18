@@ -12,11 +12,17 @@ Event kinds:
 
 from collections import deque
 from dataclasses import dataclass, field
-from math import pi, radians
+from math import atan2, hypot, pi, radians, sqrt
 
 from .config import Config
 from .filters import PointFilter
-from .hand import PINCH_FINGERS, WRIST, HandFeatures, Hysteresis
+from .hand import (
+    FINGER_TIPS,
+    PINCH_FINGERS,
+    WRIST,
+    HandFeatures,
+    Hysteresis,
+)
 
 # Gesture -> kind of event it produces. Also used to validate the JSON.
 GESTURE_KINDS: dict[str, str] = {
@@ -34,9 +40,210 @@ GESTURE_KINDS: dict[str, str] = {
     "fist_hold": "trigger",
     "two_finger_vertical": "axis",
     "two_finger_horizontal": "axis",
-    "two_finger_rotate_cw": "trigger",
-    "two_finger_rotate_ccw": "trigger",
+    "two_finger_circle_cw": "trigger",
+    "two_finger_circle_ccw": "trigger",
+    "three_finger_vertical": "axis",
+    "three_finger_horizontal": "axis",
+    "three_finger_circle_cw": "trigger",
+    "three_finger_circle_ccw": "trigger",
 }
+
+# The hand shapes that draw slides and circles: index and middle, or those two
+# with the ring finger added. One more finger held out is a different gesture
+# with the same shape to it, so the two are the same machinery with a different
+# pose and a different set of names.
+#   (prefix of the events, label for the HUD, fingers out, fingers in)
+POSES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("two_finger", "TWO FINGERS", ("index", "middle"), ("ring", "pinky")),
+    ("three_finger", "THREE FINGERS", ("index", "middle", "ring"), ("pinky",)),
+)
+
+# What each pose can produce, appended to its prefix.
+POSE_EVENTS = ("vertical", "horizontal", "circle_cw", "circle_ccw")
+
+
+Point = tuple[float, float]
+
+
+def _dist(a: Point, b: Point) -> float:
+    return hypot(a[0] - b[0], a[1] - b[1])
+
+
+def _fit_circle(pts: list[Point]) -> tuple[float, float, float] | None:
+    """Circle closest to the given points: (centre x, centre y, radius).
+
+    Kasa's algebraic fit: rewriting the circle as x^2+y^2 = Ax+By+C makes it
+    linear in the unknowns, so the answer comes out of a single 3x3 system with
+    no iteration - cheap enough to run on every frame.
+
+    On a straight run the system is degenerate, a line being a circle of
+    infinite radius, and there is nothing sensible to return: that is the
+    `None`, and it is precisely the case we want to reject.
+    """
+    n = len(pts)
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+
+    # Centred on the average point: the system is far better conditioned there.
+    suu = svv = suv = suuu = svvv = suvv = svuu = 0.0
+    for px, py in pts:
+        u = px - mx
+        v = py - my
+        suu += u * u
+        svv += v * v
+        suv += u * v
+        suuu += u * u * u
+        svvv += v * v * v
+        suvv += u * v * v
+        svuu += v * u * u
+
+    det = 2.0 * (suu * svv - suv * suv)
+    if abs(det) < 1e-12:
+        return None
+    uc = (svv * (suuu + suvv) - suv * (svvv + svuu)) / det
+    vc = (suu * (svvv + svuu) - suv * (suuu + suvv)) / det
+    return mx + uc, my + vc, sqrt(uc * uc + vc * vc + (suu + svv) / n)
+
+
+def _span(pts: list[Point], centre: Point) -> float:
+    """Arc swept around `centre` along the path, signed, in radians.
+
+    The steps are unwrapped before being summed, so crossing the far side is
+    worth nothing, and going back the way you came takes the arc back down.
+    """
+    total, prev = 0.0, None
+    for p in pts:
+        phase = atan2(p[1] - centre[1], p[0] - centre[0])
+        if prev is not None:
+            total += (phase - prev + pi) % (2 * pi) - pi
+        prev = phase
+    return total
+
+
+class CircleDetector:
+    """Fingertips travelling around a circle, the fingers keeping their aim.
+
+    Not to be confused with turning the hand like a key: there the fingers
+    change direction and swing around a wrist that stays put. Here the hand
+    travels and the two fingers go on pointing the same way - it is the *path*
+    that closes into a circle, which is why the aim is watched and required to
+    stay still.
+
+    The centre is fitted to the recent path on every frame instead of being
+    taken as its average: while the circle is still being drawn the samples all
+    sit on one arc, and their average lies on the arc itself, nowhere near the
+    centre. The fit recovers the real centre from a fraction of a turn.
+
+    What actually decides is not how neatly the path fits a circle - a hand
+    sliding sideways pivots on the elbow and draws a very clean arc - but *how
+    far round it has come*. Half a turn of a circle small enough to be one is a
+    hand's worth of travel; half a turn of the elbow's arc would take the hand
+    out of the frame.
+    """
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.samples: deque[tuple[float, float, float, float]] = deque()  # t, x, y, aim
+        self.ok = False           # the path under observation is a circle
+        self.radius = 0.0
+        self.steps = 0            # steps of `circle_step_angle` since it started
+        self._arc = 0.0           # arc since the last step, signed
+        self._dir = 0
+        self._phase: float | None = None
+        self._aim_raw: float | None = None
+        self._aim = 0.0           # unwrapped, so the +-pi crossing does not count
+        self._block_until = 0.0
+
+    def reset(self) -> None:
+        self.samples.clear()
+        self._aim_raw = None
+        self._aim = 0.0
+        self._break()
+
+    def _break(self) -> None:
+        """The path stopped being a circle: whatever was drawn does not count."""
+        self.ok = False
+        self.radius = 0.0
+        self.steps = 0
+        self._arc = 0.0
+        self._dir = 0
+        self._phase = None
+
+    # ------------------------------------------------------------------
+    def update(self, point: Point, aim: float, t: float) -> int:
+        """One frame in: +1 for a clockwise step, -1 anticlockwise, 0 for none.
+
+        Zero is also what comes back during the arming steps: they are drawn
+        like any other, they simply do not fire.
+        """
+        if self._aim_raw is not None:
+            self._aim += (aim - self._aim_raw + pi) % (2 * pi) - pi
+        self._aim_raw = aim
+        self.samples.append((t, point[0], point[1], self._aim))
+        while len(self.samples) > 2 and t - self.samples[0][0] > self.cfg.circle_window:
+            self.samples.popleft()
+
+        cfg = self.cfg
+        if len(self.samples) < cfg.circle_min_samples:
+            return 0
+
+        pts = [(x, y) for _, x, y, _ in self.samples]
+        fit = _fit_circle(pts)
+        if fit is None:
+            self._break()
+            return 0
+        cx, cy, self.radius = fit
+        span = _span(pts, (cx, cy))
+        if not self._circular(pts, (cx, cy), span):
+            self._break()
+            return 0
+
+        step = radians(cfg.circle_step_angle)
+        phase = atan2(point[1] - cy, point[0] - cx)
+        if self._phase is None:
+            # Just recognised. The arc already drawn counts towards the arming,
+            # capped so that engaging can never fire an event by itself: one
+            # more step is always to be drawn, and it lands within a quarter
+            # turn of here.
+            self._dir = 1 if span > 0 else -1
+            self.steps = min(int(abs(span) / step), cfg.circle_arm_steps)
+        else:
+            # Shortest way round: a whole turn of jump is the far side being
+            # crossed, not the hand teleporting.
+            self._arc += (phase - self._phase + pi) % (2 * pi) - pi
+        self._phase = phase
+
+        if abs(self._arc) < step or t < self._block_until:
+            return 0
+
+        # y grows downwards and the image is mirrored, so a growing angle is the
+        # clockwise circle the user sees themselves drawing.
+        direction = 1 if self._arc > 0 else -1
+        self._arc -= direction * step
+        if direction != self._dir:
+            self.steps = 0  # going round the other way restarts the arming
+        self._dir = direction
+        self.steps += 1
+        self._block_until = t + cfg.circle_cooldown
+        return direction if self.steps > cfg.circle_arm_steps else 0
+
+    def _circular(self, pts: list[Point], centre: Point, span: float) -> bool:
+        cfg = self.cfg
+        r = self.radius
+        error = sqrt(sum((_dist(p, centre) - r) ** 2 for p in pts) / len(pts))
+        aims = [a for _, _, _, a in self.samples]
+        self.ok = (
+            cfg.circle_min_radius <= r <= cfg.circle_max_radius
+            and error <= r * cfg.circle_tolerance
+            and abs(span) >= radians(cfg.circle_min_span)
+            and max(aims) - min(aims) <= radians(cfg.circle_aim_drift)
+        )
+        return self.ok
+
+    @property
+    def to_engage(self) -> int:
+        """Steps still to be drawn before the first event, for the HUD."""
+        return max(self.cfg.circle_arm_steps + 1 - self.steps, 0)
 
 
 class ClosingDetector:
@@ -104,6 +311,142 @@ class Recognition:
     anchor_at: dict[str, float] = field(default_factory=dict)  # anchoring thresholds
 
 
+class FingerPose:
+    """Slides along one axis and circles in the air, drawn with fingers held out.
+
+    Index and middle is one pose, the same two plus the ring finger another:
+    the gesture is the same, only the shape of the hand and the names of the
+    events change, so both are this one class. What it does keep apart is the
+    state: putting a third finger out mid-air ends one gesture and begins
+    another, and a half-drawn circle must not carry over into it.
+    """
+
+    def __init__(
+        self,
+        cfg: Config,
+        prefix: str,
+        label: str,
+        extended: tuple[str, ...],
+        curled: tuple[str, ...],
+    ):
+        self.cfg = cfg
+        self.prefix = prefix
+        self.mode = label
+        self.extended = extended
+        self.curled = curled
+        # The path is drawn with the tips of the fingers that are out, so a
+        # third finger joining in does not shift the circle off centre.
+        self.tips = tuple(FINGER_TIPS[f] for f in extended)
+
+        self._origin: tuple[float, float] | None = None
+        self._last: tuple[float, float] | None = None
+        self._axis: str | None = None
+        self._missing = 0
+        self._held = 0.0
+        self._until = 0.0
+        self._circle = CircleDetector(cfg)
+
+    # ------------------------------------------------------------------
+    def matches(self, feats: HandFeatures) -> bool:
+        out = feats.extended
+        return all(out[f] for f in self.extended) and not any(
+            out[f] for f in self.curled
+        )
+
+    def in_grace(self) -> bool:
+        """Is a broken pose still worth waiting on?
+
+        A curled finger sits right on the threshold that says whether it is
+        extended, so it flickers; without this the gesture would end on a single
+        bad frame and take the half-drawn circle with it.
+        """
+        return self._last is not None and self._missing < self.cfg.two_finger_grace
+
+    def end(self) -> None:
+        self._origin = None
+        self._last = None
+        self._axis = None
+        self._missing = 0
+        self._held = 0.0
+        self._until = 0.0
+        self._circle.reset()
+
+    @property
+    def detail(self) -> str:
+        if self._axis != "circle":
+            return self._axis or "slide or draw a circle"
+        left = self._circle.to_engage
+        return f"circle: {left} more to engage" if left else "circle"
+
+    # ------------------------------------------------------------------
+    def update(self, feats: HandFeatures, t: float, posed: bool) -> list[GestureEvent]:
+        """One frame of the pose. Nothing is measured during the grace frames:
+        the pose is in doubt there, and a gap in the path costs far less than a
+        stray sample would."""
+        if not posed:
+            self._missing += 1
+            return []
+        self._missing = 0
+
+        point = feats.palm_point
+        wrist = feats.points[WRIST]
+        # The circle is watched on the fingertips, in "hands": that way it does
+        # not have to be drawn any wider when you sit further from the webcam.
+        cx, cy = feats.tips_center(self.tips)
+        turn = self._circle.update(
+            (cx / feats.scale, cy / feats.scale), feats.pointing_angle(self.tips), t
+        )
+
+        if self._last is None:
+            self._origin = wrist
+            self._last = point
+            self._axis = None
+            return []
+
+        # A circle only shows itself once the path has come round far enough,
+        # and by then the slide has usually taken the lock: so it is taken back
+        # off it, and everything the slide was holding never happened.
+        if self._circle.ok and self._axis != "circle":
+            self._axis = "circle"
+            self._held = 0.0
+
+        if self._axis is None:
+            # The axis is chosen once only, on the first decisive movement:
+            # without this lock a diagonal movement would fire scroll and
+            # volume at the same time. The travel is measured at the wrist,
+            # which is steadier than the fingertips.
+            dx = wrist[0] - self._origin[0]
+            dy = wrist[1] - self._origin[1]
+            if max(abs(dx), abs(dy)) < self.cfg.axis_lock_travel:
+                self._last = point
+                return []
+            self._axis = "horizontal" if abs(dx) > abs(dy) else "vertical"
+            self._until = t + self.cfg.axis_lock_hold
+
+        if self._axis == "circle":
+            if not turn:
+                return []
+            suffix = "circle_cw" if turn > 0 else "circle_ccw"
+            return [GestureEvent(f"{self.prefix}_{suffix}", "trigger")]
+
+        if self._axis == "vertical":
+            delta = self._last[1] - point[1]  # hand up -> positive value
+        else:
+            delta = point[0] - self._last[0]  # hand right -> positive
+        self._last = point
+
+        # Held back until the circle has had its chance to speak up, then
+        # released in one go: the movement is delayed, never thrown away.
+        self._held += delta
+        if t < self._until:
+            return []
+        delta, self._held = self._held, 0.0
+
+        if abs(delta) < self.cfg.axis_deadzone:
+            return []
+        return [GestureEvent(f"{self.prefix}_{self._axis}", "axis", delta)]
+
+
 class GestureRecognizer:
     def __init__(self, cfg: Config, active: set[str] | None = None):
         self.cfg = cfg
@@ -144,14 +487,15 @@ class GestureRecognizer:
         self._fist_hold_done = False
         self._swipe_block_until = 0.0
 
-        # two fingers
-        self._two_origin: tuple[float, float] | None = None
-        self._two_last: tuple[float, float] | None = None
-        self._two_axis: str | None = None
-        self._rot_track: deque[tuple[float, float]] = deque()  # (t, turn so far)
-        self._rot_total = 0.0
-        self._rot_prev: float | None = None
-        self._rot_block_until = 0.0
+        # fingers held out: slides and circles. A pose nobody has bound anything
+        # to is not built at all - it would otherwise swallow the frames in
+        # which the hand happens to be in it, and with them the cursor.
+        self._poses = [
+            FingerPose(cfg, prefix, label, extended, curled)
+            for prefix, label, extended, curled in POSES
+            if active is None
+            or any(f"{prefix}_{event}" in active for event in POSE_EVENTS)
+        ]
 
         self._missing = 0
 
@@ -163,7 +507,7 @@ class GestureRecognizer:
         self._fist_track.clear()
         self._fist_still_since = None
         self._fist_hold_done = False
-        self._end_two_finger()
+        self._end_poses()
         for detector in self._closing.values():
             detector.reset()
         self._was_anchored = False
@@ -183,22 +527,18 @@ class GestureRecognizer:
 
         # --- fist: directional swipes and still fist ----------------------
         if feats.is_fist:
-            self._end_two_finger()
+            self._end_poses()
             self._forget_reference()
             return self._fist(feats, t)
         self._reset_fist()
 
-        # --- two fingers: continuous axes -----------------------------------
-        if self._is_two_finger(feats):
+        # --- fingers held out: sliding axes and circles ---------------------
+        pose, posed = self._pose_in_use(feats)
+        if pose is not None:
             self._forget_reference()
             events = self._release_pinches()
-            events += self._two_finger(feats, t)
-            return Recognition(
-                events=events,
-                mode="TWO FINGERS",
-                detail=self._two_axis or "slide or turn the hand",
-            )
-        self._end_two_finger()
+            events += pose.update(feats, t, posed)
+            return Recognition(events=events, mode=pose.mode, detail=pose.detail)
 
         # --- pinch: clicks and drag -----------------------------------------
         events = self._pinches(feats, t)
@@ -352,100 +692,32 @@ class GestureRecognizer:
         self._fist_still_since = None
         self._fist_hold_done = False
 
-    # --- two fingers --------------------------------------------------------
-    def _is_two_finger(self, feats: HandFeatures) -> bool:
-        return (
-            feats.index_extended
-            and feats.middle_extended
-            and not feats.ring_extended
-            and not feats.pinky_extended
-        )
+    # --- fingers held out ---------------------------------------------------
+    def _pose_in_use(self, feats: HandFeatures) -> tuple["FingerPose | None", bool]:
+        """The pose the hand is in, and whether it is being held right now.
 
-    def _two_finger(self, feats: HandFeatures, t: float) -> list[GestureEvent]:
-        point = feats.palm_point
-        wrist = feats.points[WRIST]
-        turn = self._track_rotation(feats.pointing_angle, t)
-        if self._two_last is None:
-            self._two_origin = wrist
-            self._two_last = point
-            self._two_axis = None
-            return []
+        The shape actually on show wins: a pose still inside its grace frames
+        only gets the hand back if no other pose claims it, or lifting the ring
+        finger to go from two fingers to three would spend the whole gesture
+        waiting for a pose that has already been left.
 
-        if self._two_axis is None:
-            # The axis is chosen once only, on the first decisive movement:
-            # without this lock a diagonal movement would fire scroll and
-            # volume at the same time, and turning the hand would drag them
-            # along as well.
-            #
-            # The travel is measured at the wrist and not at the palm: the wrist
-            # stays put while the hand only turns, so a rotation does not eat
-            # the lock before it has been recognised.
-            dx = wrist[0] - self._two_origin[0]
-            dy = wrist[1] - self._two_origin[1]
-            if abs(turn) >= radians(self.cfg.rotate_min_angle):
-                self._two_axis = "rotation"
-            elif max(abs(dx), abs(dy)) >= self.cfg.axis_lock_travel:
-                self._two_axis = "horizontal" if abs(dx) > abs(dy) else "vertical"
-            else:
-                self._two_last = point
-                return []
-
-        if self._two_axis == "rotation":
-            return self._rotation(turn, t)
-
-        events = []
-        if self._two_axis == "vertical":
-            delta = self._two_last[1] - point[1]  # hand up -> positive value
-            name = "two_finger_vertical"
-        else:
-            delta = point[0] - self._two_last[0]  # hand right -> positive
-            name = "two_finger_horizontal"
-        self._two_last = point
-
-        if abs(delta) >= self.cfg.axis_deadzone:
-            events.append(GestureEvent(name, "axis", delta))
-        return events
-
-    def _track_rotation(self, angle: float, t: float) -> float:
-        """Signed turn accumulated over the last `rotate_window` seconds.
-
-        atan2 jumps by a whole turn when the fingers cross the far side, so the
-        per-frame differences are unwrapped before being summed. Only the window
-        is kept: over a longer span the slow drift of a hand held up would add
-        up to a rotation nobody made.
+        Every other pose is ended here, so a gesture never resumes where it was
+        interrupted: it starts again from the first frame of its own shape.
         """
-        if self._rot_prev is not None:
-            step = angle - self._rot_prev
-            self._rot_total += (step + pi) % (2 * pi) - pi  # shortest way round
-        self._rot_prev = angle
+        posed = True
+        claimed = next((p for p in self._poses if p.matches(feats)), None)
+        if claimed is None:
+            posed = False
+            claimed = next((p for p in self._poses if p.in_grace()), None)
 
-        self._rot_track.append((t, self._rot_total))
-        while (
-            len(self._rot_track) > 1
-            and t - self._rot_track[0][0] > self.cfg.rotate_window
-        ):
-            self._rot_track.popleft()
-        return self._rot_total - self._rot_track[0][1]
+        for pose in self._poses:
+            if pose is not claimed:
+                pose.end()
+        return claimed, posed
 
-    def _rotation(self, turn: float, t: float) -> list[GestureEvent]:
-        """One event per `rotate_min_angle` of turn, keeping on while turning."""
-        if t < self._rot_block_until or abs(turn) < radians(self.cfg.rotate_min_angle):
-            return []
-        # y grows downwards and the image is mirrored, so a growing angle is the
-        # clockwise turn the user sees in front of them.
-        name = "two_finger_rotate_cw" if turn > 0 else "two_finger_rotate_ccw"
-        self._rot_track.clear()
-        self._rot_track.append((t, self._rot_total))
-        self._rot_block_until = t + self.cfg.rotate_cooldown
-        return [GestureEvent(name, "trigger")]
-
-    def _end_two_finger(self) -> None:
-        self._two_origin = None
-        self._two_last = None
-        self._two_axis = None
-        self._rot_track.clear()
-        self._rot_total = 0.0
-        self._rot_prev = None
+    def _end_poses(self) -> None:
+        for pose in self._poses:
+            pose.end()
 
     # --- pinch --------------------------------------------------------------
     def _pinches(self, feats: HandFeatures, t: float) -> list[GestureEvent]:

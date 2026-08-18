@@ -47,8 +47,12 @@ python -m venv .venv
 | **Fist** closed and still for 5 s | `fist_hold` | Play / Pause |
 | **Index + middle** open, hand up/down | `two_finger_vertical` | Scroll, like the wheel |
 | **Index + middle** open, hand right/left | `two_finger_horizontal` | Volume up / down |
-| **Index + middle** open, hand turned clockwise | `two_finger_rotate_cw` | Volume up |
-| **Index + middle** open, hand turned anticlockwise | `two_finger_rotate_ccw` | Volume down |
+| **Index + middle** open, drawing a clockwise circle | `two_finger_circle_cw` | Volume up |
+| **Index + middle** open, drawing an anticlockwise circle | `two_finger_circle_ccw` | Volume down |
+| **Index + middle + ring** open, hand up/down | `three_finger_vertical` | Volume up / down |
+| **Index + middle + ring** open, hand right/left | `three_finger_horizontal` | *(available, not bound - virtual desktops are a good fit)* |
+| **Index + middle + ring** open, drawing a clockwise circle | `three_finger_circle_cw` | Next track |
+| **Index + middle + ring** open, drawing an anticlockwise circle | `three_finger_circle_ccw` | Previous track |
 
 Practical notes:
 
@@ -58,18 +62,33 @@ Practical notes:
   same: it is what tells the clicks apart (touching the ring finger with the
   thumb brings the middle finger close too, and without the comparison the wrong
   click would fire). The genuinely tightest pinch always wins.
-- With index and middle finger open the **axis locks** on the first decisive
+- **Two fingers and three fingers are the same gesture with a different hand
+  shape**: same axes, same circle, same thresholds, each with its own set of
+  actions. They never overlap - two fingers means the ring finger is down - and
+  raising or lowering that finger mid-air ends one gesture and starts the other
+  from scratch, so a half-drawn circle is never carried across.
+- A pose with **nothing bound to it is not watched at all**: unbind all four
+  `three_finger_*` names and three fingers in the air are just a hand that
+  points and clicks, exactly as before.
+- With the fingers open the **axis locks** on the first decisive
   movement: a diagonal movement will not fire scroll and volume together, and
-  the same lock keeps sliding and turning apart. Lower the fingers to release
+  the same lock keeps sliding and circling apart. Lower the fingers to release
   it and pick another direction.
-- The rotation is measured on the direction of the two fingers, from the wrist:
-  turn the hand like a key, pivoting on the wrist. Every 20 degrees fires one
-  event, so it works as a **volume knob**: keep turning and the volume keeps
-  going. The sliding, meanwhile, is judged on the wrist, which stays put while
-  you only turn.
-- Volume has two controls, on purpose: sliding sideways is quick, turning the
-  hand is finer and does not need room to move. Bind `two_finger_horizontal` to
-  something else (or to `"none"`) if you would rather have that axis free.
+- The circle is drawn with the **hand travelling**, the fingers going on
+  pointing the same way throughout - it is not the hand turning like a key. Make
+  it about **half a hand wide or more** and keep going: past the first turn
+  every quarter of a circle fires one event, so it works as a **volume knob**.
+- The opening of a circle is indistinguishable from a slide - an arm sliding
+  sideways pivots on the elbow and draws a clean arc of its own - so the slide
+  is held back for 0.45 s before its first event. Nothing is lost, it comes out
+  in one go, but the very start of a scroll arrives a moment late. Draw circles
+  at a decent pace (**about a second per turn**): a much slower one gets a bit
+  of scrolling in before it is recognised. `axis_lock_hold` buys more room if
+  you would rather draw them slowly.
+- Volume has two controls, on purpose: sliding sideways is quick, the circle
+  does not need any particular room and never runs out of it. Bind
+  `two_finger_horizontal` to something else (or to `"none"`) if you would rather
+  have that axis free - and to `"none"` on both axes if you only want circles.
 - After a swipe there is a 0.8 s pause, so `Alt+Tab` does not machine-gun.
 - The `FIST STILL` bar in the preview shows the progress towards the 5 seconds.
 - Every gesture is recognised on **both hands independently**: see below for how
@@ -189,10 +208,13 @@ comments (local extension: plain JSON does not have them).
     "pinch_index_tap": "left_click",
     "fist_swipe_up": "alt+tab",
     "fist_hold": "play_pause",
-    "two_finger_vertical":   { "action": "scroll", "gain": 55 },
-    "two_finger_horizontal": { "action": "volume", "gain": 14 },
-    "two_finger_rotate_cw":  "volume_up",
-    "two_finger_rotate_ccw": "volume_down"
+    "two_finger_vertical":     { "action": "scroll", "gain": 55 },
+    "two_finger_horizontal":   { "action": "volume", "gain": 14 },
+    "two_finger_circle_cw":    "volume_up",
+    "two_finger_circle_ccw":   "volume_down",
+    "three_finger_vertical":   { "action": "volume", "gain": 14 },
+    "three_finger_circle_cw":  "next_track",
+    "three_finger_circle_ccw": "prev_track"
   },
   "left":  { "point_move": "none" },
   "right": {}
@@ -236,11 +258,11 @@ Valid modifiers: `ctrl`, `alt`, `shift`, `win`. Special keys: arrows, `tab`,
 | `axis` | `positive`, `negative`, `gain`, `max_rate` | Continuous movement -> repeated presses |
 
 `axis` is the general case: `volume` is nothing but this, with `volume_up` and
-`volume_down` at the two ends. To scroll through virtual desktops by moving two
-fingers horizontally:
+`volume_down` at the two ends. To scroll through virtual desktops by moving
+three fingers horizontally (the axis left free by the defaults):
 
 ```jsonc
-"two_finger_horizontal": {
+"three_finger_horizontal": {
   "action": "axis",
   "positive": "ctrl+win+right",
   "negative": "ctrl+win+left",
@@ -385,13 +407,31 @@ overridden from the `settings` section of the JSON:
   of the hand in frame: the threshold does not change if you move closer to or
   farther from the webcam.
 - `fist_still_travel` / `fist_hold_seconds` - how still, and for how long.
-- `axis_lock_travel` / `axis_deadzone` - when the two-finger axis is decided and
-  below which movement it is ignored.
-- `rotate_min_angle` / `rotate_window` / `rotate_cooldown` - degrees of turn that
-  fire one rotation event, over how long a window they have to be made, and the
-  pause afterwards. Together they set how fast the volume climbs: 20 degrees
-  every 0.15 s at most. Raise `rotate_min_angle` if a rotation slips out while
-  you are scrolling, lower it for a lighter turn of the wrist.
+- `axis_lock_travel` / `axis_deadzone` - when the axis of a slide is decided and
+  below which movement it is ignored. These, and everything below down to
+  `two_finger_grace`, are shared by the two-finger and three-finger poses: they
+  are one gesture with two hand shapes.
+- `axis_lock_hold` - how long the slide waits before its first event, to give a
+  circle time to show itself. Lower it for a snappier scroll and a bit of
+  scrolling at the start of every circle, raise it for the opposite.
+- `circle_min_radius` / `circle_max_radius` - how wide the circle has to be, in
+  "hands". Outside this range it is hand tremor on one side and an arm sliding
+  on its elbow on the other.
+- `circle_min_span` / `circle_window` - degrees of arc before a path counts as a
+  circle at all, and how much of it is kept under observation. This is what
+  really separates a circle from a slide, and together they set the slowest
+  circle that can be recognised (150 degrees inside 2 s, so about 5 s per turn).
+- `circle_step_angle` / `circle_arm_steps` / `circle_cooldown` - one event per
+  quarter turn, the first two swallowed to engage. The arc already drawn counts
+  towards them, so the first event lands within a quarter turn of the circle
+  being recognised.
+- `circle_tolerance` / `circle_aim_drift` - how far off a true circle the path
+  may sit, and how much the fingers may swing while going round. Raise the
+  second one if circles drawn with the wrist rather than the arm are missed.
+- `two_finger_grace` - frames of broken pose tolerated before the gesture ends,
+  for both poses. A curled finger sits right on the threshold that decides
+  whether it is extended, so it flickers; without this a half-drawn circle would
+  be lost. It never lets a pose keep a hand that is plainly in the other one.
 - `num_hands` / `dominant_hand` - how many hands to track, and which one keeps
   the pointer when both are in frame.
 - `active_x_*` / `active_y_*` - the portion of the frame used as a tablet.
@@ -428,7 +468,8 @@ The chain, frame by frame:
    palm reference points.
 4. [gestures.py](celebrimbor/gestures.py) is the state machine, one instance per
    hand: hysteresis on the pinches, time window for the swipes, axis lock for the
-   two fingers, adaptive cursor anchoring.
+   fingers held out (two of them or three, same machinery), adaptive cursor
+   anchoring.
 5. The **One Euro filter** ([filters.py](celebrimbor/filters.py)) damps the jitter
    without adding latency on fast movements.
 6. [actions.py](celebrimbor/actions.py) executes: **pynput** for the cursor,
