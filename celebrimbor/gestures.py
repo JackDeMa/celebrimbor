@@ -585,11 +585,13 @@ class GestureRecognizer:
         added to the new reference; on the way back to the index finger the
         offset is blended away over `anchor_blend` seconds.
         """
-        # It is enough for any of the pinches in use to be tightening.
-        anchored = False
-        for finger, detector in self._closing.items():
-            if detector.update(feats.pinches[finger], t, frozen=self._pinch[finger].state):
-                anchored = True
+        # It is enough for any of the pinches in use to be tightening, unless
+        # the palm holds the cursor at all times and there is nothing to detect.
+        anchored = self.cfg.anchor_always
+        if not anchored:
+            for finger, detector in self._closing.items():
+                if detector.update(feats.pinches[finger], t, frozen=self._pinch[finger].state):
+                    anchored = True
         was_anchored = self._was_anchored
         self._was_anchored = anchored
         raw = feats.anchor(self._anchor_name) if anchored else feats.index_point

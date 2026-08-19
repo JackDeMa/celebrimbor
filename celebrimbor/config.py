@@ -63,6 +63,9 @@ class Config:
     # measured continuously: a fixed threshold would stay latched forever for a
     # hand that naturally keeps its fingers close together.
     anchor_point: str = "palm_outer"  # palm_outer | palm_center | pinky_mcp | index_mcp | wrist
+    # Keep the cursor on the palm at all times, not only while pinching: the
+    # index finger drifts whenever it moves to click, the palm does not.
+    anchor_always: bool = True
     anchor_window: float = 1.5     # seconds over which the habitual opening is measured
     # Better to anchor early: the switch is invisible, while the index drift
     # accumulated before anchoring sticks around.
