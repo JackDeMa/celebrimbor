@@ -5,7 +5,9 @@ import time
 import cv2
 from pynput import keyboard
 
+from . import bindings as bindings_mod
 from . import hand, overlay
+from .calibration import BothFistsWatch, Calibration
 from .config import Config
 from .controller import MouseActuator
 from .detector import HAND_CONNECTIONS, HandDetector, ensure_model
@@ -21,8 +23,14 @@ _WHITE = (245, 245, 245)
 
 
 class CelebrimborApp:
-    def __init__(self, cfg: Config, bindings: dict[str, dict] | None = None):
+    def __init__(
+        self,
+        cfg: Config,
+        bindings: dict[str, dict] | None = None,
+        config_path: str | None = None,
+    ):
         self.cfg = cfg
+        self.config_path = config_path
         self.mouse = MouseActuator(
             click_cooldown=cfg.click_cooldown, dry_run=cfg.dry_run
         )
@@ -33,6 +41,11 @@ class CelebrimborApp:
         self._fps = 0.0
         self._events: list[tuple[float, str]] = []
         self._last_mode = ""
+        self.calibration: Calibration | None = None
+        self._calib_progress = None
+        self._calib_hold_until = 0.0
+        self._arming = 0.0
+        self._both_fists = BothFistsWatch()
 
     # --- global hotkeys ----------------------------------------------------
     def _make_hotkeys(self) -> keyboard.GlobalHotKeys:
@@ -41,6 +54,7 @@ class CelebrimborApp:
                 "<ctrl>+<alt>+q": self.stop,
                 "<ctrl>+<alt>+p": self.toggle_pause,
                 "<ctrl>+<alt>+<space>": self.swap_dominant,
+                "<ctrl>+<alt>+c": self.start_calibration,
             }
         )
 
@@ -56,6 +70,100 @@ class CelebrimborApp:
         # here rather than by the loop.
         self._events.append((time.monotonic(), f"{hand[0].upper()} POINTER"))
         print(f"Pointer to the {hand} hand.", flush=True)
+
+    # --- calibration --------------------------------------------------------
+    def start_calibration(self) -> None:
+        """Begin redrawing the active area. Safe to call from the hotkey thread.
+
+        Nothing is done here beyond flipping the state: the run itself is fed
+        by the main loop, which is the only place a frame exists.
+        """
+        if self.calibration is not None:
+            # The same hotkey both starts and calls it off: while one is running
+            # it is the only key you will be reaching for.
+            self.cancel_calibration()
+            return
+        self.engine.reset()  # drop a drag or a held key before we stop dispatching
+        self._both_fists.reset()
+        self.calibration = Calibration()
+        self._events.append((time.monotonic(), "CALIBRATION"))
+        print(
+            "Calibration: hold your hand still to start, trace a rectangle in "
+            "the air, then hold still again to finish. Ctrl+Alt+C to cancel.",
+            flush=True,
+        )
+
+    def cancel_calibration(self) -> None:
+        self.calibration = None
+        self._calib_progress = None
+        self._both_fists.reset()
+        print("Calibration cancelled, the active area is unchanged.", flush=True)
+
+    def _idle_states(self, feats) -> list[EngineState]:
+        """Placeholder states while calibrating: the HUD still wants a row."""
+        return [
+            EngineState(
+                hand=slot,
+                mode="CALIBRATING" if feats.get(slot) else "NO HAND",
+                detail=self._calib_progress.text if self._calib_progress else "",
+            )
+            for slot in hand.HAND_SLOTS
+        ]
+
+    def _calibration_point(self, feats) -> tuple[float, float] | None:
+        """The hand the rectangle is traced with: the dominant one if in view.
+
+        The palm, not the fingertip - the same point the cursor rides on when
+        it is anchored, so the corners you draw are the corners you will reach.
+        """
+        for slot in (self.engine.dominant, hand.other_hand(self.engine.dominant)):
+            f = feats.get(slot)
+            if f is not None:
+                return f.palm_point
+        return None
+
+    def _run_calibration(self, feats, now: float) -> None:
+        """One frame of the calibration, and the applying of its result."""
+        calib = self.calibration
+        self._calib_progress = calib.update(self._calibration_point(feats), now)
+        if not calib.done:
+            return
+
+        if calib.result is not None:
+            self._apply_area(calib.result)
+        else:
+            print(f"Calibration: {calib.message}.", flush=True)
+        self._events.append((now, calib.message.upper()[:18]))
+        self.calibration = None
+        self._both_fists.reset()
+        # The result is left on screen for a moment rather than vanishing on the
+        # very frame it is decided, which nobody would see.
+        self._calib_hold_until = now + 2.0
+
+    def _apply_area(self, rect: tuple[float, float, float, float]) -> None:
+        """The new area onto the running Config, and into the file if we can."""
+        c = self.cfg
+        c.active_x_min, c.active_y_min, c.active_x_max, c.active_y_max = rect
+        print(
+            f"Calibrated active area: x {c.active_x_min:.3f}-{c.active_x_max:.3f}  "
+            f"y {c.active_y_min:.3f}-{c.active_y_max:.3f}",
+            flush=True,
+        )
+        try:
+            path = bindings_mod.save_settings(
+                self.config_path,
+                {
+                    "active_x_min": round(c.active_x_min, 4),
+                    "active_x_max": round(c.active_x_max, 4),
+                    "active_y_min": round(c.active_y_min, 4),
+                    "active_y_max": round(c.active_y_max, 4),
+                },
+            )
+            print(f"Saved to {path}.", flush=True)
+        except (OSError, ValueError) as exc:
+            # A read-only folder is no reason to lose the calibration: it is
+            # live either way, it just will not outlast this run.
+            print(f"Could not save the calibration ({exc}), it holds until you quit.", flush=True)
 
     def toggle_overlay(self) -> None:
         if self.overlay is not None:
@@ -88,6 +196,10 @@ class CelebrimborApp:
             "Celebrimbor started. Ctrl+Alt+Q to quit, Ctrl+Alt+P to pause, "
             "Ctrl+Alt+Space to move the pointer to the other hand."
         )
+        print(
+            "Ctrl+Alt+C (or both fists held still for "
+            f"{int(self._both_fists.seconds)}s) to redraw the active area."
+        )
         print(f"Pointer on the {self.engine.dominant} hand.")
         if self.cfg.dry_run:
             print("DRY-RUN: gestures are recognised but the mouse does not move.")
@@ -113,13 +225,33 @@ class CelebrimborApp:
                     self._fps = 0.9 * self._fps + 0.1 * (1.0 / dt)
 
                 feats = {obs.slot: hand.extract(obs.landmarks) for obs in hands}
-                states = self.engine.update(feats, now)
-                self._record(states, now)
+
+                if self.calibration is not None:
+                    # The engine does not run at all while calibrating: the hand
+                    # drawing the rectangle would be clicking and sliding its
+                    # way round the frame otherwise.
+                    states = self._idle_states(feats)
+                    self._arming = 0.0
+                    self._run_calibration(feats, now)
+                else:
+                    states = self.engine.update(feats, now)
+                    self._record(states, now)
+                    self._arming = self._both_fists.update(states, now)
+                    if self._arming >= 1.0:
+                        self.start_calibration()
+                    if now > self._calib_hold_until:
+                        self._calib_progress = None
 
                 if self.overlay is not None:
+                    # The calibration line goes where the events go: the card is
+                    # two hands and two lines, and during a calibration the
+                    # instruction is the only thing worth either of them.
+                    notes = [e for _, e in self._events]
+                    if self._calib_progress is not None:
+                        notes = [f"CAL {self._calib_progress.text}"]
                     self.overlay.update(
                         states,
-                        [e for _, e in self._events],
+                        notes,
                         self.engine.dominant,
                         self.engine.enabled,
                     )
@@ -178,6 +310,11 @@ class CelebrimborApp:
             self.swap_dominant()
         elif key == ord("o"):
             self.toggle_overlay()
+        elif key == ord("c"):
+            if self.calibration is None:
+                self.start_calibration()
+            else:
+                self.cancel_calibration()
         return True
 
     # --- console (when the preview is disabled) -----------------------------
@@ -214,6 +351,9 @@ class CelebrimborApp:
             1,
         )
 
+        if self._calib_progress is not None:
+            self._draw_calibration(frame, w, h)
+
         # The point actually driving the cursor: during a pinch it moves from
         # the index finger to the palm, and you can see it here.
         for state in states:
@@ -225,6 +365,11 @@ class CelebrimborApp:
             cv2.circle(frame, rp, 2, _RED if anchored else _GREEN, -1)
 
         self._draw_header(frame, w, states)
+
+        # The 15-second hold has to be visible from the first second, or holding
+        # two fists still would just look like nothing happening.
+        if self._arming > 0.0:
+            self._progress(frame, "CALIBRATE IN", 1.0 - self._arming, w // 2 - 120, 80)
 
         # One column of readouts per hand, on its own side of the frame: the
         # left hand is the one on the left of the mirrored image.
@@ -239,7 +384,7 @@ class CelebrimborApp:
 
         cv2.putText(
             frame,
-            "q=quit p=pause h=skeleton d=pointer o=overlay | Ctrl+Alt+Q/P/Space",
+            "q=quit p=pause h=skeleton d=pointer o=overlay c=calibrate | Ctrl+Alt+Q/P/Space/C",
             (10, h - 12),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.4,
@@ -259,6 +404,59 @@ class CelebrimborApp:
             _GREY,
             1,
         )
+
+    def _draw_calibration(self, frame, w: int, h: int) -> None:
+        """The calibration takeover: dimmed frame, the box drawn so far, a bar.
+
+        The frame is dimmed on purpose. It is the one unmistakable sign that the
+        gestures are not being listened to right now, which matters more here
+        than anywhere else: you are about to wave your hand around in poses that
+        would normally be clicking things.
+        """
+        prog = self._calib_progress
+        overlay_frame = frame.copy()
+        cv2.rectangle(overlay_frame, (0, 0), (w, h), (0, 0, 0), -1)
+        cv2.addWeighted(overlay_frame, 0.35, frame, 0.65, 0, frame)
+
+        # The path traced so far, and the box it currently spans.
+        calib = self.calibration
+        trace = calib.path if calib is not None else ()
+        if len(trace) > 1:
+            pts = [(int(x * w), int(y * h)) for x, y in trace]
+            for a, b in zip(pts, pts[1:]):
+                cv2.line(frame, a, b, _YELLOW, 2)
+        if prog.rect is not None:
+            x0, y0, x1, y1 = prog.rect
+            done = calib is None  # the accepted rectangle, once it is settled
+            cv2.rectangle(
+                frame,
+                (int(x0 * w), int(y0 * h)),
+                (int(x1 * w), int(y1 * h)),
+                _GREEN if done else _YELLOW,
+                2 if done else 1,
+            )
+
+        cv2.rectangle(frame, (0, 0), (w, 56), (25, 25, 25), -1)
+        cv2.putText(
+            frame,
+            f"CALIBRATION: {prog.text}",
+            (10, 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            _YELLOW,
+            2,
+        )
+        cv2.putText(
+            frame,
+            "trace the rectangle you want to reach  |  Ctrl+Alt+C to cancel",
+            (10, 47),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            _GREY,
+            1,
+        )
+        if prog.ratio > 0.0:
+            self._progress(frame, "HOLD", prog.ratio, 10, h - 60)
 
     def _draw_header(self, frame, w: int, states: list[EngineState]) -> None:
         """Two rows: the mode of each hand, and underneath its detail."""

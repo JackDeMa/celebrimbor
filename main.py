@@ -151,7 +151,7 @@ def main() -> int:
     if not any(binds.values()):
         print("No gesture bound: check the \"bindings\" section.")
 
-    return CelebrimborApp(cfg, binds).run()
+    return CelebrimborApp(cfg, binds, config_path=a.config).run()
 
 
 if __name__ == "__main__":

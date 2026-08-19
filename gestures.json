@@ -1,72 +1,45 @@
-{
   // Celebrimbor gesture configuration.
   // Lines starting with // are comments (local extension to JSON).
   // Full list of gestures and actions: python main.py --list-gestures
-
-  // Overrides the parameters in celebrimbor/config.py. Leave {} for the defaults.
+{
   "settings": {
     "fist_hold_seconds": 1.0,
     "swipe_min_travel": 1.1,
     "drag_hold": 0.45,
-    "dominant_hand": "right"
+    "dominant_hand": "right",
+    "active_x_min": 0.3198,
+    "active_x_max": 0.7884,
+    "active_y_min": 0.3955,
+    "active_y_max": 0.888
   },
-
-  // Gesture -> action, for both hands. Use "none" to disable a gesture.
   "bindings": {
-    // --- pointing hand ---
-    // Pinches not bound here are not even evaluated: "pinch_ring_tap" is
-    // available but inactive, add it if you need a third click.
     "point_move": "move_cursor",
     "pinch_index_tap": "left_click",
     "pinch_index_hold": "drag",
     "pinch_middle_tap": "right_click",
-    // Two quick index pinches already work as a double click: Windows joins
-    // them itself. Uncomment for a guaranteed one, with no timing to hit.
-    // "pinch_ring_tap": "double_click",
-
-    // --- closed fist flicked in a direction ---
     "fist_swipe_left": "alt+shift+tab",
     "fist_swipe_right": "alt+tab",
     "fist_swipe_up": "win+d",
     "fist_swipe_down": "win+d",
-
-    // --- fist closed and still for 5 seconds ---
     "fist_hold": "play_pause",
-
-    // --- index and middle finger open, hand sliding ---
-    "two_finger_vertical": { "action": "scroll", "gain": 55 },
-    //"two_finger_horizontal": { "action": "volume", "gain": 14 },
-    "two_finger_horizontal": { "action": "scroll", "gain": 55, "horizontal": true },
-
-    // --- index and middle finger open, drawing a circle in the air ---
-    // Volume knob: the fingers keep pointing the same way and the hand travels
-    // around a circle. The first two quarters are swallowed to make sure it
-    // really is a circle and not a slide that curves, then every quarter turn
-    // fires. Sliding and circling are mutually exclusive, whichever is
-    // recognised first wins until you lower the fingers.
+    "two_finger_vertical": {
+      "action": "scroll",
+      "gain": 55
+    },
+    "two_finger_horizontal": {
+      "action": "scroll",
+      "gain": 55,
+      "horizontal": true
+    },
     "two_finger_circle_cw": "volume_up",
     "two_finger_circle_ccw": "volume_down",
-
-    // --- index, middle and ring finger open ---
-    // The same gesture with one more finger out: its own axes, its own circle,
-    // its own actions. The two poses never overlap, and switching from one to
-    // the other starts the gesture over from scratch.
-    // A pose with nothing bound to it is not watched at all, so unbinding all
-    // four names below gives you back a hand that only points and clicks.
-    "three_finger_vertical": { "action": "volume", "gain": 14 },
-    // Virtual desktops on the horizontal slide, if you want it:
-    // "three_finger_horizontal": { "action": "axis", "positive": "ctrl+win+right", "negative": "ctrl+win+left", "gain": 3, "max_rate": 2 },
+    "three_finger_vertical": {
+      "action": "volume",
+      "gain": 14
+    },
     "three_finger_circle_cw": "next_track",
     "three_finger_circle_ccw": "prev_track"
   },
-
-  // Per-hand overrides, laid on top of "bindings". Both hands get the whole set
-  // above, so either one can drive the mouse when it is alone in frame; with
-  // both in view the pointer goes to the dominant hand ("dominant_hand" in
-  // settings, Ctrl+Alt+Space to swap it on the fly).
-  // Use these two sections to specialise one hand, e.g. "pinch_index_tap":
-  // "none" on the left to make sure only the right one ever clicks.
   "left": {},
-
   "right": {}
 }

@@ -260,3 +260,31 @@ def load(
                 warnings.append(w)
 
     return bindings, warnings
+
+
+def save_settings(path: Path | str | None, values: dict) -> Path:
+    """Write `values` into the "settings" section, leaving the rest alone.
+
+    Rewritten through json, so the comments outside the section do not survive
+    - which is why they are put back: the default file is mostly comments, and
+    calibrating should not cost you the documentation you are reading.
+    """
+    path = Path(path) if path else DEFAULT_PATH
+    original = path.read_text(encoding="utf-8") if path.exists() else DEFAULT_TEXT
+    data = json.loads(strip_comments(original))
+    data["settings"] = {**(data.get("settings") or {}), **values}
+
+    body = json.dumps(data, indent=2)
+    # Reattach the comment lines that led the file, the header explaining what
+    # it is. The ones inside the sections are gone; keeping them would mean
+    # writing a JSON-with-comments editor, and this is a file you rarely write.
+    header = []
+    for line in original.splitlines():
+        if line.lstrip().startswith("//"):
+            header.append(line)
+        elif header:
+            break
+    if header:
+        body = "\n".join(header) + "\n" + body
+    path.write_text(body + "\n", encoding="utf-8")
+    return path
