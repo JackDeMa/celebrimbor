@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 models/*.task
 models/*.part
+build/
+dist/
+*.zip
