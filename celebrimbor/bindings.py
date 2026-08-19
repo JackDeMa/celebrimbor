@@ -25,7 +25,7 @@ DEFAULT_TEXT = """{
 
   // Overrides the parameters in celebrimbor/config.py. Leave {} for the defaults.
   "settings": {
-    "fist_hold_seconds": 5.0,
+    "fist_hold_seconds": 1.0,
     "swipe_min_travel": 1.1,
     "drag_hold": 0.45,
     "dominant_hand": "right"
