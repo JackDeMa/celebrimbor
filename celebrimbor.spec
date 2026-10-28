@@ -1,7 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
 
+import os
+
 datas = [('models/hand_landmarker.task', 'models')]
+# The face model is only needed by the head / eye pointer: bundled when it has
+# been downloaded (run once with --pointer head), downloaded on demand otherwise.
+if os.path.exists('models/face_landmarker.task'):
+    datas.append(('models/face_landmarker.task', 'models'))
 datas += collect_data_files('mediapipe')
 
 

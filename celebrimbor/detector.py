@@ -1,7 +1,7 @@
-"""Hand detection with MediaPipe Tasks (HandLandmarker).
+"""Hand and face detection with MediaPipe Tasks (HandLandmarker, FaceLandmarker).
 
 The old `mediapipe.solutions` have been dropped from recent MediaPipe releases:
-this uses the Tasks API instead, which needs the model file downloaded once
+this uses the Tasks API instead, which needs the model files downloaded once
 (see `ensure_model`).
 """
 
@@ -20,12 +20,36 @@ MODEL_URL = (
 )
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "hand_landmarker.task"
 
+FACE_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/1/face_landmarker.task"
+)
+DEFAULT_FACE_MODEL_PATH = DEFAULT_MODEL_PATH.with_name("face_landmarker.task")
+
 HAND_CONNECTIONS = [
     (c.start, c.end) for c in vision.HandLandmarksConnections.HAND_CONNECTIONS
 ]
 
 
-def ensure_model(path: Path = DEFAULT_MODEL_PATH) -> Path:
+# The parts of the face mesh the preview draws: eyes, irises and lips are what
+# the face pointer reads, the oval shows where the model thinks the face is.
+FACE_CONNECTIONS = [
+    (c.start, c.end)
+    for group in (
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_FACE_OVAL,
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_LEFT_EYE,
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_EYE,
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_LEFT_IRIS,
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_IRIS,
+        vision.FaceLandmarksConnections.FACE_LANDMARKS_LIPS,
+    )
+    for c in group
+]
+
+
+def ensure_model(
+    path: Path = DEFAULT_MODEL_PATH, url: str = MODEL_URL, name: str = "HandLandmarker"
+) -> Path:
     """Return the model path, downloading the file if it is missing."""
     path = Path(path)
     if path.exists() and path.stat().st_size > 0:
@@ -34,9 +58,9 @@ def ensure_model(path: Path = DEFAULT_MODEL_PATH) -> Path:
     import urllib.request
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading the HandLandmarker model to {path} ...")
+    print(f"Downloading the {name} model to {path} ...")
     tmp = path.with_suffix(".part")
-    urllib.request.urlretrieve(MODEL_URL, tmp)
+    urllib.request.urlretrieve(url, tmp)
     tmp.replace(path)
     print("Model ready.")
     return path
@@ -119,6 +143,46 @@ class HandDetector:
         if slot not in HAND_SLOTS:
             return HAND_SLOTS[0]
         return other_hand(slot) if self.mirrored else slot
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+
+class FaceDetector:
+    """Synchronous wrapper in VIDEO mode: a frame in, one face's landmarks out.
+
+    Only one face is tracked: the cursor belongs to whoever sits in front of
+    the screen, and a second face walking by must not be able to take it.
+    """
+
+    def __init__(
+        self,
+        model_path: Path,
+        min_detection_confidence: float = 0.6,
+        min_tracking_confidence: float = 0.5,
+    ):
+        options = vision.FaceLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=str(model_path)),
+            running_mode=vision.RunningMode.VIDEO,
+            num_faces=1,
+            min_face_detection_confidence=min_detection_confidence,
+            min_face_presence_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
+        )
+        self._landmarker = vision.FaceLandmarker.create_from_options(options)
+        self._last_ts = -1
+
+    def detect(self, rgb_frame, timestamp_ms: int) -> list | None:
+        """Return the landmarks of the face in frame, or None."""
+        if timestamp_ms <= self._last_ts:
+            timestamp_ms = self._last_ts + 1
+        self._last_ts = timestamp_ms
+
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        result = self._landmarker.detect_for_video(image, timestamp_ms)
+        if not result.face_landmarks:
+            return None
+        return result.face_landmarks[0]
 
     def close(self) -> None:
         self._landmarker.close()

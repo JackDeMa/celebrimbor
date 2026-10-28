@@ -6,13 +6,17 @@ import sys
 from celebrimbor import bindings as bindings_mod
 from celebrimbor.app import CelebrimborApp
 from celebrimbor.config import Config
+from celebrimbor.face_gestures import FACE_GESTURE_KINDS
 from celebrimbor.gestures import GESTURE_KINDS
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="celebrimbor",
-        description="Control the mouse by moving your hand in front of the webcam.",
+        description=(
+            "Control the mouse by moving your hand, your head or your eyes "
+            "in front of the webcam."
+        ),
     )
     p.add_argument(
         "--config",
@@ -23,9 +27,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--hands",
         type=int,
-        choices=(1, 2),
+        choices=(0, 1, 2),
         default=None,
-        help="how many hands to track at once (default 2)",
+        help="how many hands to track at once (default 2, 0 = face only)",
+    )
+    p.add_argument(
+        "--pointer",
+        choices=("hand", "head", "eyes"),
+        default=None,
+        help="what moves the cursor: the hand, the head or the eyes (default hand)",
     )
     p.add_argument(
         "--dominant",
@@ -56,6 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", default=None, help="path to an alternative hand_landmarker.task"
     )
     p.add_argument(
+        "--face-model", default=None, help="path to an alternative face_landmarker.task"
+    )
+    p.add_argument(
         "--smoothing",
         type=float,
         default=None,
@@ -75,6 +88,13 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _scale_face_ranges(cfg: Config, sensitivity: float) -> None:
+    """Less head or eye movement to cross the screen (high sensitivity), or more."""
+    factor = max(0.2, min(3.0, 1.0 / sensitivity))
+    for name in ("head_range_x", "head_range_y", "eyes_range_x", "eyes_range_y"):
+        setattr(cfg, name, getattr(cfg, name) * factor)
+
+
 def _scale_active_area(cfg: Config, sensitivity: float) -> None:
     """Shrinks (high sensitivity) or widens (low) the active area of the frame."""
     factor = max(0.2, min(3.0, 1.0 / sensitivity))
@@ -92,6 +112,8 @@ def apply_cli(cfg: Config, a: argparse.Namespace) -> None:
         ("camera", "camera_index"),
         ("hands", "num_hands"),
         ("dominant", "dominant_hand"),
+        ("pointer", "pointer"),
+        ("face_model", "face_model_path"),
         ("width", "frame_width"),
         ("height", "frame_height"),
         ("fps", "target_fps"),
@@ -110,13 +132,20 @@ def apply_cli(cfg: Config, a: argparse.Namespace) -> None:
         cfg.mirror = False
     if a.dry_run:
         cfg.dry_run = True
+    if a.smoothing is not None:
+        # The same knob for whichever pointer is in use.
+        cfg.head_min_cutoff = cfg.eyes_min_cutoff = a.smoothing
     if a.sensitivity is not None:
         _scale_active_area(cfg, a.sensitivity)
+        _scale_face_ranges(cfg, a.sensitivity)
 
 
 def print_reference() -> None:
     print("Recognised gestures (name to use in gestures.json):\n")
     for name, kind in GESTURE_KINDS.items():
+        print(f"  {name:<24} kind: {kind}")
+    print("\nFace gestures (\"face\" section, with --pointer head or eyes):\n")
+    for name, kind in FACE_GESTURE_KINDS.items():
         print(f"  {name:<24} kind: {kind}")
     print("\nActions usable as a string:\n")
     for alias in sorted(bindings_mod.ALIASES):

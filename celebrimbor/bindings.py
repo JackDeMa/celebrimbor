@@ -6,6 +6,9 @@ support but which keep the configuration readable.
 The "bindings" section applies to both hands; the "left" and "right" sections
 add to it or override it for one hand only, with "none" to switch a gesture off
 on that side.
+
+The "face" section binds the face gestures (winks, mouth), used when the
+cursor follows the head or the eyes ("pointer" in settings).
 """
 
 import json
@@ -14,6 +17,8 @@ from pathlib import Path
 
 from .actions import Action, Click, Drag, Hotkey, MoveCursor, NoAction, RepeatAxis, Scroll
 from .config import Config
+from .face import FACE_SLOT
+from .face_gestures import FACE_GESTURE_KINDS
 from .gestures import GESTURE_KINDS
 from .hand import HAND_SLOTS
 
@@ -78,7 +83,23 @@ DEFAULT_TEXT = """{
   // "none" on the left to make sure only the right one ever clicks.
   "left": {},
 
-  "right": {}
+  "right": {},
+
+  // Face gestures, used when the cursor follows the head or the eyes: set
+  // "pointer" to "head" or "eyes" in settings, or start with --pointer head.
+  // The hands keep every gesture above except moving the cursor.
+  "face": {
+    "face_move": "move_cursor",
+    // One eye shut and reopened: a click. Both eyes together (a blink) never click.
+    "wink_left_tap": "left_click",
+    // The same wink held for "face_hold" seconds: drag until the eye reopens.
+    "wink_left_hold": "drag",
+    "wink_right_tap": "right_click"
+    // For whoever cannot wink one eye at a time:
+    // "mouth_open_tap": "left_click", "mouth_open_hold": "drag",
+    // Both eyes shut for "blink_long_seconds":
+    // "blink_long": "double_click"
+  }
 }
 """
 
@@ -94,6 +115,15 @@ ALIASES = {
     "scroll": lambda: Scroll(),
     "scroll_h": lambda: Scroll(horizontal=True),
     "volume": lambda: _volume_axis(),
+}
+
+
+# What the face slot gets when the file has no "face" section at all.
+DEFAULT_FACE_BINDINGS = {
+    "face_move": "move_cursor",
+    "wink_left_tap": "left_click",
+    "wink_left_hold": "drag",
+    "wink_right_tap": "right_click",
 }
 
 
@@ -193,16 +223,18 @@ def apply_settings(cfg: Config, settings: dict) -> list[str]:
     return warnings
 
 
-def build_bindings(specs: dict) -> tuple[dict[str, Action], list[str]]:
-    """Turn one hand's gesture -> spec mapping into gesture -> action."""
+def build_bindings(
+    specs: dict, kinds: dict[str, str] = GESTURE_KINDS
+) -> tuple[dict[str, Action], list[str]]:
+    """Turn one slot's gesture -> spec mapping into gesture -> action."""
     bindings: dict[str, Action] = {}
     warnings: list[str] = []
     for name, spec in specs.items():
-        kind = GESTURE_KINDS.get(name)
+        kind = kinds.get(name)
         if kind is None:
             warnings.append(
                 f"unknown gesture ignored: {name!r} "
-                f"(available: {', '.join(sorted(GESTURE_KINDS))})"
+                f"(available: {', '.join(sorted(kinds))})"
             )
             continue
         try:
@@ -258,5 +290,13 @@ def load(
             if w not in seen:
                 seen.add(w)
                 warnings.append(w)
+
+    face = data.get(FACE_SLOT)
+    if face is None:
+        # Configurations written before the face pointer have no section for
+        # it: the defaults make --pointer head work on them out of the box.
+        face = DEFAULT_FACE_BINDINGS
+    bindings[FACE_SLOT], face_warnings = build_bindings(face, FACE_GESTURE_KINDS)
+    warnings += [f"face: {w}" for w in face_warnings]
 
     return bindings, warnings

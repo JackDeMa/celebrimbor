@@ -23,6 +23,7 @@ import sys
 import tkinter as tk
 from ctypes import wintypes
 
+from .face import FACE_SLOT
 from .hand import HAND_SLOTS
 
 # --- Win32 ------------------------------------------------------------------
@@ -62,13 +63,13 @@ def _work_area() -> tuple[int, int, int, int]:
 
 
 class Overlay:
-    """A small always-on-top card with the state of both hands."""
+    """A small always-on-top card with the state of both hands (and the face)."""
 
     WIDTH = 250
     MARGIN = 24
     MAX_CHARS = 26  # what fits on one line at this width
 
-    def __init__(self, opacity: float = 0.82):
+    def __init__(self, opacity: float = 0.82, face: bool = False):
         self.root = tk.Tk()
         self.root.overrideredirect(True)  # no title bar, no border
         self.root.attributes("-topmost", True)
@@ -79,7 +80,7 @@ class Overlay:
         frame.pack(fill="both", expand=True)
 
         self._hands: dict[str, tk.Label] = {}
-        for slot in HAND_SLOTS:
+        for slot in (*HAND_SLOTS, FACE_SLOT) if face else HAND_SLOTS:
             label = tk.Label(
                 frame,
                 text=f"{slot[0].upper()}  -",
@@ -192,7 +193,7 @@ class Overlay:
             text = f"{state.hand[0].upper()}{marker} {state.mode}"
             if state.detail:
                 text = f"{text}  {state.detail}"
-            if state.mode == "NO HAND":
+            if state.mode in ("NO HAND", "NO FACE"):
                 color = _GREY
             else:
                 color = _GREEN if enabled else _RED
@@ -224,13 +225,13 @@ class Overlay:
             pass
 
 
-def create(opacity: float = 0.82) -> Overlay | None:
+def create(opacity: float = 0.82, face: bool = False) -> Overlay | None:
     """Build the overlay, or return None with a reason if it cannot be had."""
     if sys.platform != "win32":
         print("Overlay: Windows only, carrying on without it.")
         return None
     try:
-        return Overlay(opacity=opacity)
+        return Overlay(opacity=opacity, face=face)
     except Exception as exc:  # a missing Tk, a headless session, a locked desktop
         print(f"Overlay unavailable ({exc}), carrying on without it.")
         return None

@@ -8,7 +8,9 @@
     "fist_hold_seconds": 1.0,
     "swipe_min_travel": 1.1,
     "drag_hold": 0.45,
-    "dominant_hand": "right"
+    "dominant_hand": "right",
+    // What moves the cursor: "hand", "head" or "eyes" (see the "face" section)
+    "pointer": "hand"
   },
 
   // Gesture -> action, for both hands. Use "none" to disable a gesture.
@@ -68,5 +70,22 @@
   // "none" on the left to make sure only the right one ever clicks.
   "left": {},
 
-  "right": {}
+  "right": {},
+
+  // Face gestures, used when the cursor follows the head or the eyes: set
+  // "pointer" to "head" or "eyes" in settings, or start with --pointer head.
+  // The hands keep every gesture above except moving the cursor: pinch to
+  // click while the head aims, if you like.
+  "face": {
+    "face_move": "move_cursor",
+    // One eye shut and reopened: a click. Both eyes together (a blink) never click.
+    "wink_left_tap": "left_click",
+    // The same wink held for "face_hold" seconds: drag until the eye reopens.
+    "wink_left_hold": "drag",
+    "wink_right_tap": "right_click"
+    // For whoever cannot wink one eye at a time:
+    // "mouth_open_tap": "left_click", "mouth_open_hold": "drag",
+    // Both eyes shut for "blink_long_seconds":
+    // "blink_long": "double_click"
+  }
 }

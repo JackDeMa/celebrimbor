@@ -4,6 +4,10 @@ Each hand has its own recogniser and its own bindings, so the two never share
 any state: a pinch on the left hand cannot cancel a drag on the right one. The
 only thing they do share is the mouse, and there is just one cursor: which hand
 is allowed to move it is decided here, frame by frame.
+
+With the face pointer ("pointer": "head" or "eyes") the face has a recogniser
+and bindings of its own, under the "face" slot, and holds the cursor for good:
+the hands keep clicking, scrolling and swiping, but never move it.
 """
 
 from dataclasses import dataclass, field
@@ -11,8 +15,11 @@ from dataclasses import dataclass, field
 from .actions import Action, Backend
 from .config import Config
 from .controller import MouseActuator
+from .face import FACE_SLOT, FaceFeatures
+from .face_gestures import FACE_POINTERS, FaceRecognizer
 from .gestures import GestureRecognizer, Recognition
 from .hand import HAND_SLOTS, HandFeatures, other_hand
+
 
 
 @dataclass
@@ -28,6 +35,9 @@ class EngineState:
     ref_point: tuple[float, float] | None = None
     anchor_at: dict[str, float] = field(default_factory=dict)
     events: list[str] = field(default_factory=list)
+    # face only: how open each eye is (1 = habitual) and the calibration
+    eyes: dict[str, float] = field(default_factory=dict)
+    calibration: float = 0.0
 
 
 class GestureEngine:
@@ -45,12 +55,21 @@ class GestureEngine:
         # state (a drag in progress, the accumulated volume steps) and one hand
         # must not be able to unwind the other's.
         self.bindings: dict[str, dict[str, Action]] = {
-            slot: dict(bindings.get(slot) or {}) for slot in HAND_SLOTS
+            slot: dict(bindings.get(slot) or {}) for slot in (*HAND_SLOTS, FACE_SLOT)
         }
         self.recognizers = {
-            slot: GestureRecognizer(cfg, active=set(binds))
-            for slot, binds in self.bindings.items()
+            slot: GestureRecognizer(cfg, active=set(self.bindings[slot]))
+            for slot in HAND_SLOTS
         }
+        if cfg.pointer not in ("hand", *FACE_POINTERS):
+            print(
+                f"Warning: unknown pointer {cfg.pointer!r} "
+                f"(valid: hand, head, eyes), falling back to 'hand'."
+            )
+            cfg.pointer = "hand"
+        self.face: FaceRecognizer | None = None
+        if cfg.pointer in FACE_POINTERS:
+            self.face = FaceRecognizer(cfg, active=set(self.bindings[FACE_SLOT]))
         self.enabled = True
         self.dominant = cfg.dominant_hand if cfg.dominant_hand in HAND_SLOTS else "right"
         if cfg.dominant_hand not in HAND_SLOTS:
@@ -67,6 +86,18 @@ class GestureEngine:
         self._cursor_hand = None
         return self.dominant
 
+    @property
+    def pointer_holder(self) -> str:
+        """Who the cursor belongs to, for the HUD: the face or a hand."""
+        return FACE_SLOT if self.face is not None else self.dominant
+
+    def recalibrate(self) -> bool:
+        """Take the face's neutral pose again. False without a face pointer."""
+        if self.face is None:
+            return False
+        self.face.recalibrate()
+        return True
+
     # ------------------------------------------------------------------
     def set_enabled(self, value: bool) -> None:
         self.enabled = value
@@ -78,6 +109,9 @@ class GestureEngine:
         for slot, recognizer in self.recognizers.items():
             for event in recognizer.reset():
                 self._dispatch(slot, event)
+        if self.face is not None:
+            for event in self.face.reset():
+                self._dispatch(FACE_SLOT, event)
         for binds in self.bindings.values():
             for action in binds.values():
                 action.reset(self.backend)
@@ -86,16 +120,20 @@ class GestureEngine:
 
     # ------------------------------------------------------------------
     def update(
-        self, feats: dict[str, HandFeatures | None], t: float
+        self,
+        feats: dict[str, HandFeatures | None],
+        t: float,
+        face: FaceFeatures | None = None,
     ) -> list[EngineState]:
         """One frame: the features of every visible hand in, one state each out.
 
         Slots with no hand in front of the camera get `None`, which their
         recogniser needs in order to run its own grace period and let go of
-        whatever it was holding.
+        whatever it was holding. The same goes for `face`, whose state comes
+        last, and only with the face pointer on.
         """
         if not self.enabled:
-            return [
+            states = [
                 EngineState(
                     hand=slot,
                     mode="PAUSED",
@@ -104,6 +142,11 @@ class GestureEngine:
                 )
                 for slot in HAND_SLOTS
             ]
+            if self.face is not None:
+                states.append(
+                    EngineState(hand=FACE_SLOT, mode="PAUSED", detail="Ctrl+Alt+P to resume")
+                )
+            return states
 
         self.backend.now = t
         results: dict[str, Recognition] = {
@@ -135,6 +178,25 @@ class GestureEngine:
                     events=labels,
                 )
             )
+
+        if self.face is not None:
+            result = self.face.update(face, t)
+            labels = [
+                label
+                for label in (self._dispatch(FACE_SLOT, e) for e in result.events)
+                if label
+            ]
+            states.append(
+                EngineState(
+                    hand=FACE_SLOT,
+                    mode=result.mode,
+                    detail=result.detail,
+                    ref_point=result.ref_point,
+                    events=labels,
+                    eyes=result.eyes,
+                    calibration=result.calibration,
+                )
+            )
         return states
 
     # ------------------------------------------------------------------
@@ -149,7 +211,11 @@ class GestureEngine:
         The one exception is a drag in progress: the pointer is not taken away
         from the hand holding the mouse button down, or bringing the other hand
         into frame would fling whatever you are dragging across the screen.
+
+        With the face pointer on, no hand ever gets it.
         """
+        if self.face is not None:
+            return None
         candidates = [
             slot
             for slot in HAND_SLOTS

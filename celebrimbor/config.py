@@ -18,7 +18,8 @@ class Config:
     model_path: str | None = None  # None = default model under models/
     # Two hands tracked at once, each with its own bindings (sections "left"
     # and "right" in gestures.json). Set to 1 to track a single hand: it costs
-    # a little less CPU, and the hand still lands in its own slot.
+    # a little less CPU, and the hand still lands in its own slot. 0 turns hand
+    # tracking off altogether, for the face pointer on its own.
     num_hands: int = 2
     # Hand holding the pointer when both are in frame. On its own, either hand
     # drives the cursor. Ctrl+Alt+Space swaps it while the program is running.
@@ -119,6 +120,56 @@ class Config:
     # quarter turn of the circle being recognised.
     circle_arm_steps: int = 2
     circle_cooldown: float = 0.10     # pause after an event
+
+    # --- face pointer ---
+    # What drives the cursor: "hand" (the index finger, as above), "head" (the
+    # nose, turning the head like a joystick) or "eyes" (the pupils). With the
+    # face in charge the hands keep every other gesture - pinch to click while
+    # the head aims - and only lose the pointer.
+    pointer: str = "hand"  # hand | head | eyes
+    face_model_path: str | None = None  # None = default model under models/
+    # Seconds spent measuring the neutral pose at startup (and on Ctrl+Alt+C):
+    # look at the centre of the screen meanwhile. Every movement afterwards is
+    # measured from there, so no particular way of sitting is assumed.
+    face_calibration_seconds: float = 1.5
+    # Head rotation, in eye distances of nose travel, that takes the cursor
+    # from the centre to the edge of the screen: about 0.18 is 20 degrees.
+    head_range_x: float = 0.18
+    head_range_y: float = 0.12
+    # Pupil travel, in eye widths, that does the same. The eye covers a screen
+    # with a tiny movement and a webcam sees it at a few pixels: expect to aim
+    # at buttons, not at characters.
+    eyes_range_x: float = 0.14
+    eyes_range_y: float = 0.08
+    # In eyes mode the head turning counts too, weighted by this: you rarely
+    # look at a corner without turning a little towards it. 0 = pupils only.
+    eyes_head_gain: float = 0.5
+    # One Euro cutoff of the face cursor, per pointer: the pupils jitter far
+    # more than the head and need much heavier smoothing.
+    head_min_cutoff: float = 1.0
+    eyes_min_cutoff: float = 0.35
+    face_beta: float = 0.3
+    # Eye closure, relative to how open the eye habitually is (the maximum over
+    # `eye_window` seconds): as with the pinch anchoring, a fixed threshold
+    # would never fit both narrow and wide eyes.
+    eye_window: float = 2.0
+    eye_closed_ratio: float = 0.50   # below this fraction of the opening -> closed
+    eye_open_ratio: float = 0.70     # above this -> open again (hysteresis)
+    # A wink: one eye shut, the other open. Shorter than this is noise, and
+    # both eyes shut at once is an ordinary blink and never clicks.
+    wink_min: float = 0.12
+    wink_max: float = 1.0            # longer than this, with no hold bound -> nothing
+    face_hold: float = 0.6           # wink or mouth held longer -> hold (drag)
+    blink_long_seconds: float = 0.8  # both eyes shut this long -> blink_long
+    # Inner lip gap in eye distances, with hysteresis.
+    mouth_open_on: float = 0.35
+    mouth_open_off: float = 0.25
+    # Closing an eye drags the pupil and the eyelid with it, and nods the head
+    # a touch: while an eye or the mouth is closing, the cursor goes back to
+    # where it was this long before and stays there, so the click lands where
+    # you were aiming.
+    face_rewind: float = 0.20
+    face_settle: float = 0.15        # after reopening, before the cursor moves again
 
     # --- misc ---
     show_preview: bool = True

@@ -3,10 +3,12 @@
 **Control your Windows PC with hand gestures and a webcam.**
 
 Move the mouse, the volume and the windows by moving your hand in front of the
-camera. Runs entirely on your machine: no account, no cloud, no extra hardware.
+camera - or point with your **head** or your **eyes** and click with a wink.
+Runs entirely on your machine: no account, no cloud, no extra hardware.
 
 Stack: **OpenCV** (capture) + **MediaPipe HandLandmarker** (21 hand landmarks) +
-**pynput** (real mouse and keyboard).
+**MediaPipe FaceLandmarker** (478 face landmarks, irises included, only for the
+head and eye pointer) + **pynput** (real mouse and keyboard).
 
 Every gesture is bound to its action in [gestures.json](gestures.json):
 recognition and action are kept separate, so you can remap everything without
@@ -191,6 +193,76 @@ its own) while the red one is the click threshold.
 With `anchor_point` you can pick a different reference: `palm_outer` (default),
 `palm_center`, `pinky_mcp`, `index_mcp`, `wrist`.
 
+## Pointing with the head or the eyes
+
+The cursor can follow your face instead of your hand:
+
+```
+python main.py --pointer head     # the nose works as a joystick
+python main.py --pointer eyes     # the cursor goes where you look
+```
+
+or `"pointer": "head"` in `settings`. On the first run the
+`face_landmarker.task` model (~4 MB) is downloaded into `models/`.
+
+- **`head`** - turn your head and the cursor follows, about 20 degrees from the
+  centre to the edge of the screen. Steady and precise: the one to start with.
+- **`eyes`** - the pupils, measured against the corners of each eye, plus half
+  of the head's turn (you rarely look at a corner without turning towards it a
+  little). Hands-free and nearly head-free, but a webcam sees the pupil at a
+  handful of pixels: it aims at buttons and icons, not at characters, and it
+  wants good, even light on the face.
+
+**Calibration.** For the first 1.5 seconds the program measures your neutral
+pose: **look at the centre of the screen** while the `CALIBRATING` bar fills.
+Every movement afterwards is measured from there, so it does not matter how you
+sit. If you shift in your chair, or the cursor no longer sits in the centre when
+you look at the centre, press **`Ctrl+Alt+C`** (or `c` with the preview
+focused) and calibrate again.
+
+**Clicks come from the eyelids**, bound in the `face` section of
+[gestures.json](gestures.json):
+
+| Face gesture | Name in the JSON | Default action |
+|---|---|---|
+| Head / eyes moving | `face_move` | Moves the cursor |
+| **Left** eye winked | `wink_left_tap` | Left click |
+| **Left** eye shut for 0.6 s | `wink_left_hold` | Drag, until the eye reopens |
+| **Right** eye winked | `wink_right_tap` | Right click |
+| **Right** eye shut for 0.6 s | `wink_right_hold` | *(available, not bound)* |
+| Both eyes shut for 0.8 s | `blink_long` | *(available, not bound - `double_click` fits)* |
+| Mouth opened and closed | `mouth_open_tap` | *(available, not bound)* |
+| Mouth held open | `mouth_open_hold` | *(available, not bound)* |
+
+- **Blinking never clicks.** An ordinary blink shuts both eyes, and a wink is
+  one eye shut *with the other open*. A blink ends with one eye reopening a
+  frame before the other, which looks like the start of a wink: an eye has to
+  have reopened after a blink before it can wink again, so that frame never
+  counts.
+- **The click lands where you were aiming.** Shutting an eye drags the pupil
+  with the eyelid and nods the head a touch. So as soon as an eye starts
+  closing the cursor goes back to where it was 0.2 s earlier (`face_rewind`) and
+  stays there until the eye is open again - the same idea as the palm anchoring
+  of the hand pointer.
+- **Eyes are not all the same.** Shut is measured against how open *your* eye
+  habitually is, the maximum over the last two seconds, not against a fixed
+  threshold: it works with narrow eyes, wide eyes and glasses alike. The
+  `LEYE` / `REYE` bars in the preview show each eye's opening, with the red
+  tick where it counts as shut.
+- **During a wink-drag the cursor moves**: with `--pointer eyes` it follows the
+  one eye left open.
+- **Not everyone can wink one eye at a time.** Bind the mouth instead:
+  `"mouth_open_tap": "left_click", "mouth_open_hold": "drag"` - mind that it
+  then fires when you talk or yawn.
+
+**The hands keep working.** With the face in charge they only lose the cursor:
+pinching still clicks, two fingers still scroll, the fist still switches
+windows. Aim with the head and pinch to click, if you prefer that to winking.
+To track the face alone, and save the CPU of the hand model, use `--hands 0`.
+
+The face tracker follows **one face**, the most prominent: someone walking past
+behind you cannot take the cursor.
+
 ## Configuring the gestures
 
 Everything lives in [gestures.json](gestures.json). Lines starting with `//` are
@@ -293,11 +365,13 @@ Every gesture has a kind, and only accepts compatible actions:
 | `Ctrl+Alt+Q` | Quit (global, works even without window focus) |
 | `Ctrl+Alt+P` | Pause / resume control (global) |
 | `Ctrl+Alt+Space` | Move the pointer to the other hand (global) |
+| `Ctrl+Alt+C` | Calibrate the head / eye pointer again (global) |
 | `q` or `Esc` | Quit (with the preview window focused) |
 | `p` | Pause |
 | `h` | Show/hide the hand skeleton |
 | `d` | Move the pointer to the other hand |
 | `o` | Show/hide the always-on-top overlay |
+| `c` | Calibrate the head / eye pointer again |
 
 The two global shortcuts are the escape hatch: if the cursor goes wild,
 `Ctrl+Alt+P` immediately hands control back to your real hand.
@@ -306,25 +380,30 @@ The two global shortcuts are the escape hatch: if the cursor goes wild,
 
 ```
 main.py [--config gestures.json] [--camera 0]
-        [--hands 2] [--dominant right]
+        [--hands 2] [--dominant right] [--pointer hand]
         [--width 640] [--height 480] [--fps 30]
         [--no-preview] [--no-overlay] [--no-mirror] [--dry-run]
         [--smoothing 1.2] [--sensitivity 1.0] [--model PATH]
-        [--list-gestures]
+        [--face-model PATH] [--list-gestures]
 ```
 
 Command-line options take precedence over the `settings` section of the JSON.
 
-- `--hands` - how many hands to track at once, 1 or 2 (default 2).
+- `--hands` - how many hands to track at once, 1 or 2 (default 2); 0 tracks
+  none, for the head or eye pointer on its own.
+- `--pointer` - what moves the cursor: `hand` (default), `head` or `eyes`. See
+  "Pointing with the head or the eyes".
 - `--dominant` - which hand holds the pointer when both are in frame
   (default `right`). `Ctrl+Alt+Space` swaps it while the program runs.
 - `--no-overlay` - do not show the always-on-top card (see above).
 - `--dry-run` - recognises gestures and shows everything, but does **not** touch
   the mouse and keyboard. Use it to tune the thresholds safely.
 - `--sensitivity` - > 1 shrinks the active area (you barely have to move your
-  hand), < 1 widens it (more precision, more movement).
+  hand), < 1 widens it (more precision, more movement). It scales the head and
+  eye ranges the same way.
 - `--smoothing` - the filter's cutoff frequency: low values (0.5) give a very
   smooth but slower cursor, high values (3) a more responsive but jumpier one.
+  It applies to the head and eye pointer too.
 
 ## Preview
 
@@ -379,6 +458,8 @@ through `ctypes`, both from the standard library: no extra dependency.
 | [celebrimbor/detector.py](celebrimbor/detector.py) | MediaPipe Tasks + model download |
 | [celebrimbor/hand.py](celebrimbor/hand.py) | From the 21 landmarks to extended fingers / pinches |
 | [celebrimbor/gestures.py](celebrimbor/gestures.py) | Recognition: produces named events |
+| [celebrimbor/face.py](celebrimbor/face.py) | From the face landmarks to head turn, pupils, eyelids, mouth |
+| [celebrimbor/face_gestures.py](celebrimbor/face_gestures.py) | Head / eye pointer, winks and calibration |
 | [celebrimbor/bindings.py](celebrimbor/bindings.py) | Reading and validating the JSON |
 | [celebrimbor/actions.py](celebrimbor/actions.py) | The runnable actions (clicks, keys, scroll) |
 | [celebrimbor/engine.py](celebrimbor/engine.py) | Connects events to actions, one recogniser per hand |
@@ -438,6 +519,27 @@ overridden from the `settings` section of the JSON:
 - `min_cutoff` / `beta` - One Euro filter: low `min_cutoff` = smoother, high
   `beta` = less latency on fast movements.
 
+### Head and eye pointer
+
+- `pointer` - `hand`, `head` or `eyes`.
+- `face_calibration_seconds` - how long the neutral pose is measured.
+- `head_range_x` / `head_range_y` - nose travel, in eye distances, from the
+  centre to the edge of the screen (0.18 is about 20 degrees of head turn).
+  Lower them to move your head less.
+- `eyes_range_x` / `eyes_range_y` - pupil travel, in eye widths, that does the
+  same. `eyes_head_gain` - how much the head's turn counts in eyes mode (0 =
+  pupils only).
+- `head_min_cutoff` / `eyes_min_cutoff` / `face_beta` - One Euro filter of the
+  face cursor; the pupils jitter far more than the head and get a much lower
+  cutoff.
+- `eye_window` / `eye_closed_ratio` / `eye_open_ratio` - when an eye counts as
+  shut, relative to its habitual opening.
+- `wink_min` / `wink_max` / `face_hold` / `blink_long_seconds` - how long a wink
+  has to last, when it becomes a drag, and the long blink.
+- `mouth_open_on` / `mouth_open_off` - lip gap, in eye distances.
+- `face_rewind` / `face_settle` - how far back the cursor goes when an eye
+  starts closing, and how long it waits after it reopens.
+
 ## Notes
 
 - Decent light is needed: in the dark the webcam drops its frame rate and the
@@ -494,6 +596,7 @@ its own licence. The credit for the hand recognition goes entirely to MediaPipe.
 |---|---|---|---|
 | [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Google | Apache 2.0 | Hand detection and the 21 landmarks |
 | `hand_landmarker.task` model | Google | Apache 2.0 | Detector weights, downloaded from `storage.googleapis.com/mediapipe-models` |
+| `face_landmarker.task` model | Google | Apache 2.0 | Face and iris landmarks for the head / eye pointer, downloaded the same way |
 | [OpenCV](https://opencv.org/) (`opencv-python`) | OpenCV team | Apache 2.0 | Webcam capture and preview window |
 | [pynput](https://github.com/moses-palmer/pynput) | Moses Palmér | LGPL v3 | Mouse and keyboard control, global hotkeys |
 | [NumPy](https://numpy.org/) | NumPy developers | BSD 3-Clause | Numerical foundation (dependency of OpenCV and MediaPipe) |
@@ -506,7 +609,7 @@ the description in the original paper:
 > Interactive Systems.* CHI 2012, pp. 2527-2530.
 > <https://gery.casiez.net/1euro/>
 
-The MediaPipe model is downloaded at runtime and is **not** included in the
+The MediaPipe models are downloaded at runtime and is **not** included in the
 repository (see [.gitignore](.gitignore)); Google's Apache 2.0 licence applies.
 Mind pynput's licence: it is **LGPL v3**. Installed from pip, as it is here, it
 imposes nothing on this project; but bundling it inside a frozen executable
