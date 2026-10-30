@@ -1,0 +1,66 @@
+# Builds the Windows executable.
+#   - pushing a tag v* (git tag v0.2.0 && git push origin v0.2.0): GitHub release
+#     with the zip attached
+#   - "Run workflow" on the Actions page: the zip as a downloadable artifact only
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller==6.22.2
+
+      # Not in git (*.task is ignored): fetched here so both get bundled.
+      - name: Download models
+        run: |
+          New-Item -ItemType Directory -Force models | Out-Null
+          $base = "https://storage.googleapis.com/mediapipe-models"
+          Invoke-WebRequest "$base/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" -OutFile models/hand_landmarker.task
+          Invoke-WebRequest "$base/face_landmarker/face_landmarker/float16/1/face_landmarker.task" -OutFile models/face_landmarker.task
+
+      - name: Build
+        run: |
+          pyinstaller --noconfirm celebrimbor.spec
+          Copy-Item gestures.json dist/celebrimbor/
+          dist/celebrimbor/celebrimbor.exe --list-gestures
+
+      - name: Zip
+        id: zip
+        run: |
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "${{ github.sha }}".Substring(0, 7) }
+          $name = "celebrimbor-$version-win-x64"
+          Compress-Archive -Path dist/celebrimbor/* -DestinationPath "$name.zip"
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      # The folder, not the zip: GitHub zips artifacts on download anyway.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip.outputs.name }}
+          path: dist/celebrimbor
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" "${{ steps.zip.outputs.name }}.zip" --title "Celebrimbor ${{ github.ref_name }}" --generate-notes
