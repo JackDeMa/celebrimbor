@@ -260,7 +260,8 @@ focused) and calibrate again.
 **The hands keep working.** With the face in charge they only lose the cursor:
 pinching still clicks, two fingers still scroll, the fist still switches
 windows. Aim with the head and pinch to click, if you prefer that to winking.
-To track the face alone, and save the CPU of the hand model, use `--hands 0`.
+To track the face alone, and save most of the CPU of the hand model, use
+`--hands 0`: the hands are then only watched for the pause fists.
 
 The face tracker follows **one face**, the most prominent: someone walking past
 behind you cannot take the cursor.
@@ -374,9 +375,19 @@ Every gesture has a kind, and only accepts compatible actions:
 | `d` | Move the pointer to the other hand |
 | `o` | Show/hide the always-on-top overlay |
 | `c` | Calibrate the head / eye pointer again |
+| **Both fists** closed for 3 s | Pause / resume, like `Ctrl+Alt+P` |
 
 The two global shortcuts are the escape hatch: if the cursor goes wild,
 `Ctrl+Alt+P` immediately hands control back to your real hand.
+
+**Pausing with the fists.** Close both fists and hold them for 3 seconds
+(`pause_fists_seconds`); a bar fills in the preview, and the same gesture
+resumes. Two fists are reserved for this: while both are closed the hands do
+nothing else. It works with `--hands 0` too, where the hands are watched one
+frame in three for this alone; not with `--hands 1`, which only ever sees one.
+
+The preview window has a column on the right with the gestures currently
+bound to the pointer and the keys above.
 
 ## Command-line options
 
@@ -533,7 +544,9 @@ overridden from the `settings` section of the JSON:
   pupils only).
 - `head_min_cutoff` / `eyes_min_cutoff` / `face_beta` - One Euro filter of the
   face cursor; the pupils jitter far more than the head and get a much lower
-  cutoff.
+  cutoff. Lower cutoff = steadier when still; higher beta = less lag on fast
+  movements.
+- `pause_fists_seconds` - how long both fists must stay closed to pause.
 - `eye_window` / `eye_closed_ratio` / `eye_open_ratio` - when an eye counts as
   shut, relative to its habitual opening.
 - `wink_min` / `wink_max` / `face_hold` / `blink_long_seconds` - how long a wink

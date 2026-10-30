@@ -20,6 +20,7 @@ from .detector import (
 from .engine import FACE_SLOT, EngineState, GestureEngine
 
 WINDOW = "Celebrimbor"
+_HELP_W = 320  # width of the instructions column beside the camera image
 
 _GREEN = (120, 230, 120)
 _GREY = (170, 170, 170)
@@ -41,6 +42,12 @@ class CelebrimborApp:
         self._fps = 0.0
         self._events: list[tuple[float, str]] = []
         self._last_mode = ""
+        # both fists closed: pause / resume
+        self._fists_since: float | None = None
+        self._fists_done = False
+        self._pause_progress = 0.0
+        self._frame_no = 0
+        self._hands: list = []
 
     # --- global hotkeys ----------------------------------------------------
     def _make_hotkeys(self) -> keyboard.GlobalHotKeys:
@@ -71,6 +78,31 @@ class CelebrimborApp:
             self._events.append((time.monotonic(), "F RECALIBRATE"))
             print("Recalibrating: look at the centre of the screen.", flush=True)
 
+    def _fists_pause(self, feats: dict, now: float) -> bool:
+        """Both fists closed for `pause_fists_seconds`: pause or resume.
+
+        Returns whether both fists are closed right now.
+        """
+        if len(feats) < 2 or not all(f.is_fist for f in feats.values()):
+            self._fists_since = None
+            self._fists_done = False
+            self._pause_progress = 0.0
+            return False
+        if self._fists_since is None:
+            self._fists_since = now
+        held = now - self._fists_since
+        if not self._fists_done and held >= self.cfg.pause_fists_seconds:
+            # Once per hold: keep the fists closed and it does not flip back.
+            self._fists_done = True
+            self.toggle_pause()
+            label = "RESUMED" if self.engine.enabled else "PAUSED"
+            self._events.append((now, label))
+            print(f"{label} (both fists).", flush=True)
+        self._pause_progress = (
+            0.0 if self._fists_done else held / max(self.cfg.pause_fists_seconds, 1e-6)
+        )
+        return True
+
     def toggle_overlay(self) -> None:
         if self.overlay is not None:
             self.overlay.set_visible(not self.overlay.visible)
@@ -83,10 +115,10 @@ class CelebrimborApp:
             return 2
 
         detector = face_detector = None
-        if tracks_hands:
-            model_path = (
-                ensure_model(self.cfg.model_path) if self.cfg.model_path else ensure_model()
-            )
+        # Loaded even with --hands 0: the two fists that pause are watched anyway.
+        model_path = (
+            ensure_model(self.cfg.model_path) if self.cfg.model_path else ensure_model()
+        )
         if self.engine.face is not None:
             face_model = ensure_model(
                 self.cfg.face_model_path or DEFAULT_FACE_MODEL_PATH,
@@ -98,14 +130,13 @@ class CelebrimborApp:
         if cap is None:
             return 1
 
-        if tracks_hands:
-            detector = HandDetector(
-                model_path,
-                num_hands=max(1, min(2, self.cfg.num_hands)),
-                min_detection_confidence=self.cfg.min_detection_confidence,
-                min_tracking_confidence=self.cfg.min_tracking_confidence,
-                mirrored=self.cfg.mirror,
-            )
+        detector = HandDetector(
+            model_path,
+            num_hands=min(2, self.cfg.num_hands) or 2,
+            min_detection_confidence=self.cfg.min_detection_confidence,
+            min_tracking_confidence=self.cfg.min_tracking_confidence,
+            mirrored=self.cfg.mirror,
+        )
         if self.engine.face is not None:
             face_detector = FaceDetector(
                 face_model,
@@ -121,7 +152,8 @@ class CelebrimborApp:
         hotkeys = self._make_hotkeys()
         hotkeys.start()
         print(
-            "Celebrimbor started. Ctrl+Alt+Q to quit, Ctrl+Alt+P to pause, "
+            "Celebrimbor started. Ctrl+Alt+Q to quit, Ctrl+Alt+P (or both fists "
+            f"closed for {self.cfg.pause_fists_seconds:.0f} s) to pause, "
             "Ctrl+Alt+Space to move the pointer to the other hand."
         )
         if self.engine.face is not None:
@@ -147,7 +179,12 @@ class CelebrimborApp:
 
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 now = time.monotonic()
-                hands = detector.detect(rgb, int(now * 1000)) if detector else []
+                # With --hands 0 the hands are only watched for the pause fists:
+                # one frame in three is plenty for a 3-second hold.
+                self._frame_no += 1
+                if tracks_hands or self._frame_no % 3 == 0:
+                    self._hands = detector.detect(rgb, int(now * 1000))
+                hands = self._hands
                 face_landmarks = (
                     face_detector.detect(rgb, int(now * 1000)) if face_detector else None
                 )
@@ -158,6 +195,11 @@ class CelebrimborApp:
                     self._fps = 0.9 * self._fps + 0.1 * (1.0 / dt)
 
                 feats = {obs.slot: hand.extract(obs.landmarks) for obs in hands}
+                # Two fists are the pause gesture and nothing else: the hand
+                # recognisers never see them, or a still fist would fire its own
+                # fist_hold on the way there.
+                if self._fists_pause(feats, now) or not tracks_hands:
+                    feats = {}
                 face_feats = None
                 if face_landmarks is not None:
                     fh, fw = frame.shape[:2]
@@ -183,7 +225,7 @@ class CelebrimborApp:
                     if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                         break
                     self._draw(frame, hands, face_landmarks, states)
-                    cv2.imshow(WINDOW, frame)
+                    cv2.imshow(WINDOW, self._with_help(frame))
                     if not self._handle_keys():
                         break
         except KeyboardInterrupt:
@@ -191,8 +233,7 @@ class CelebrimborApp:
         finally:
             self.engine.reset()
             hotkeys.stop()
-            if detector is not None:
-                detector.close()
+            detector.close()
             if face_detector is not None:
                 face_detector.close()
             cap.release()
@@ -300,19 +341,14 @@ class CelebrimborApp:
                 frame, ev, (w - 200, 90 + i * 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, _YELLOW, 2
             )
 
-        if face_state is None:
-            keys = "q=quit p=pause h=skeleton d=pointer o=overlay | Ctrl+Alt+Q/P/Space"
-        else:
-            keys = "q=quit p=pause h=skeleton o=overlay c=calibrate | Ctrl+Alt+Q/P/C"
-        cv2.putText(
-            frame,
-            keys,
-            (10, h - 12),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            _GREY,
-            1,
-        )
+        if self._pause_progress > 0.0:
+            label = "RESUME" if not self.engine.enabled else "PAUSE"
+            self._progress(frame, label, self._pause_progress, w // 2 - 120, h // 2 + 40)
+        if not self.engine.enabled:
+            cv2.putText(
+                frame, "PAUSED", (w // 2 - 70, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.2, _RED, 3
+            )
+
         if self.cfg.dry_run:
             cv2.putText(
                 frame, "DRY-RUN", (w - 180, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _YELLOW, 2
@@ -326,6 +362,59 @@ class CelebrimborApp:
             _GREY,
             1,
         )
+
+    def _with_help(self, frame):
+        """The frame with a column of basic instructions on its right.
+
+        The gestures are read off the bindings actually loaded, so the column
+        never disagrees with gestures.json.
+        """
+        fh, fw = frame.shape[:2]
+        out = cv2.copyMakeBorder(
+            frame, 0, 0, 0, _HELP_W, cv2.BORDER_CONSTANT, value=(25, 25, 25)
+        )
+        holder = self.engine.pointer_holder
+        face_mode = self.engine.face is not None
+        mover = self.engine.face.pointer if face_mode else "index finger"
+        rows: list[tuple[str, str]] = [
+            (f"GESTURES ({mover.upper() if face_mode else holder.upper() + ' HAND'})", "")
+        ]
+        for name, action in self.engine.bindings[holder].items():
+            gesture = mover if name in ("point_move", "face_move") else name.replace("_", " ")
+            rows.append((gesture, action.label.upper()))
+        rows += [
+            ("", ""),
+            ("both fists closed", f"PAUSE {self.cfg.pause_fists_seconds:.0f}s"),
+            ("", ""),
+            ("KEYS (THIS WINDOW)", ""),
+            ("q / Esc", "quit"),
+            ("p", "pause / resume"),
+            ("h / o", "skeleton / overlay"),
+            ("c" if face_mode else "d", "calibrate" if face_mode else "swap hand"),
+            ("", ""),
+            ("GLOBAL", ""),
+            ("Ctrl+Alt+Q / P", "quit / pause"),
+            (
+                "Ctrl+Alt+C" if face_mode else "Ctrl+Alt+Space",
+                "calibrate" if face_mode else "swap hand",
+            ),
+        ]
+
+        x = fw + 12
+        for i, (left, right) in enumerate(rows):
+            y = 22 + i * 15
+            if y > fh - 8:
+                break
+            header = not right and left.isupper()
+            cv2.putText(
+                out, left, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                _YELLOW if header else _GREY, 1,
+            )
+            if right:
+                cv2.putText(
+                    out, right[:18], (x + 165, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, _WHITE, 1
+                )
+        return out
 
     def _draw_header(self, frame, w: int, states: list[EngineState]) -> None:
         """Two rows: the mode of each hand, and underneath its detail."""

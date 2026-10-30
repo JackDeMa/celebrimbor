@@ -145,10 +145,12 @@ class Config:
     # look at a corner without turning a little towards it. 0 = pupils only.
     eyes_head_gain: float = 0.7
     # One Euro cutoff of the face cursor, per pointer: the pupils jitter far
-    # more than the head and need much heavier smoothing.
-    head_min_cutoff: float = 1.0
-    eyes_min_cutoff: float = 0.35
-    face_beta: float = 0.3
+    # more than the head and need much heavier smoothing. The cutoff is low so
+    # a face held still sits still; `face_beta` raises it with the speed, in
+    # screens per second, so a deliberate turn is not slowed down.
+    head_min_cutoff: float = 0.4
+    eyes_min_cutoff: float = 0.2
+    face_beta: float = 4.0
     # Eye closure, relative to how open the eye habitually is (the maximum over
     # `eye_window` seconds): as with the pinch anchoring, a fixed threshold
     # would never fit both narrow and wide eyes.
@@ -170,6 +172,11 @@ class Config:
     # you were aiming.
     face_rewind: float = 0.20
     face_settle: float = 0.15        # after reopening, before the cursor moves again
+
+    # --- pause ---
+    # Both fists closed this long: pause or resume, like Ctrl+Alt+P. Watched
+    # with --hands 0 too, where the hands are looked at for this alone.
+    pause_fists_seconds: float = 3.0
 
     # --- misc ---
     show_preview: bool = True
