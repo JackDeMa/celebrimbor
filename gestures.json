@@ -27,10 +27,12 @@
     // "pinch_ring_tap": "double_click",
 
     // --- closed fist flicked in a direction ---
-    "fist_swipe_left": "alt+shift+tab",
-    "fist_swipe_right": "alt+tab",
-    "fist_swipe_up": "win+d",
-    "fist_swipe_down": "win+d",
+    // next_window, prev_window, next_desktop, prev_desktop, show_desktop send
+    // the right shortcut on Windows and on macOS alike.
+    "fist_swipe_left": "prev_window",
+    "fist_swipe_right": "next_window",
+    "fist_swipe_up": "show_desktop",
+    "fist_swipe_down": "show_desktop",
 
     // --- fist closed and still for 5 seconds ---
     "fist_hold": "play_pause",
@@ -57,7 +59,7 @@
     // four names below gives you back a hand that only points and clicks.
     "three_finger_vertical": { "action": "volume", "gain": 14 },
     // Virtual desktops on the horizontal slide, if you want it:
-    // "three_finger_horizontal": { "action": "axis", "positive": "ctrl+win+right", "negative": "ctrl+win+left", "gain": 3, "max_rate": 2 },
+    // "three_finger_horizontal": { "action": "axis", "positive": "next_desktop", "negative": "prev_desktop", "gain": 3, "max_rate": 2 },
     "three_finger_circle_cw": "next_track",
     "three_finger_circle_ccw": "prev_track"
   },

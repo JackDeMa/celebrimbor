@@ -1,7 +1,7 @@
-# Builds the Windows executable.
+# Builds Celebrimbor for Windows x64 and macOS Apple Silicon.
 #   - pushing a tag v* (git tag v0.2.0 && git push origin v0.2.0): GitHub release
-#     with the zip attached
-#   - "Run workflow" on the Actions page: the zip as a downloadable artifact only
+#     with both zips attached (a pre-release if the tag has a dash: v0.3.0-rc1)
+#   - "Run workflow" on the Actions page: the zips as downloadable artifacts only
 name: build
 
 on:
@@ -13,11 +13,18 @@ permissions:
   contents: write
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win-x64
+          - os: macos-14
+            platform: macos-arm64
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
-        shell: pwsh
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -34,33 +41,53 @@ jobs:
       # Not in git (*.task is ignored): fetched here so both get bundled.
       - name: Download models
         run: |
-          New-Item -ItemType Directory -Force models | Out-Null
-          $base = "https://storage.googleapis.com/mediapipe-models"
-          Invoke-WebRequest "$base/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" -OutFile models/hand_landmarker.task
-          Invoke-WebRequest "$base/face_landmarker/face_landmarker/float16/1/face_landmarker.task" -OutFile models/face_landmarker.task
+          mkdir -p models
+          base=https://storage.googleapis.com/mediapipe-models
+          curl -fsSL -o models/hand_landmarker.task "$base/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+          curl -fsSL -o models/face_landmarker.task "$base/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 
       - name: Build
         run: |
           pyinstaller --noconfirm celebrimbor.spec
-          Copy-Item gestures.json dist/celebrimbor/
-          dist/celebrimbor/celebrimbor.exe --list-gestures
+          cp gestures.json dist/celebrimbor/
+          dist/celebrimbor/celebrimbor --list-gestures
 
-      - name: Zip
-        id: zip
+      - name: Name
+        id: name
         run: |
-          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "${{ github.sha }}".Substring(0, 7) }
-          $name = "celebrimbor-$version-win-x64"
-          Compress-Archive -Path dist/celebrimbor/* -DestinationPath "$name.zip"
-          "name=$name" >> $env:GITHUB_OUTPUT
+          if [ "${{ github.ref_type }}" = tag ]; then version="${{ github.ref_name }}"; else version="${GITHUB_SHA::7}"; fi
+          echo "zip=celebrimbor-$version-${{ matrix.platform }}.zip" >> "$GITHUB_OUTPUT"
 
-      # The folder, not the zip: GitHub zips artifacts on download anyway.
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/celebrimbor/* -DestinationPath "${{ steps.name.outputs.zip }}"
+
+      # ditto keeps the executable bits and the symlinks the app bundle needs.
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/celebrimbor "${{ steps.name.outputs.zip }}"
+
+      # The zip, not the folder: artifacts drop the executable bit on macOS.
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.zip.outputs.name }}
-          path: dist/celebrimbor
+          name: ${{ steps.name.outputs.zip }}
+          path: ${{ steps.name.outputs.zip }}
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - name: Release
-        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" "${{ steps.zip.outputs.name }}.zip" --title "Celebrimbor ${{ github.ref_name }}" --generate-notes
+          TAG: ${{ github.ref_name }}
+        run: |
+          pre=""
+          case "$TAG" in *-*) pre="--prerelease" ;; esac
+          gh release create "$TAG" *.zip --repo "${{ github.repository }}" --title "Celebrimbor $TAG" --generate-notes $pre

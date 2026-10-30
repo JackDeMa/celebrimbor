@@ -1,5 +1,6 @@
 """Main loop: webcam capture -> landmarks (hands, face) -> gestures -> mouse."""
 
+import sys
 import time
 
 import cv2
@@ -29,6 +30,40 @@ _YELLOW = (60, 220, 240)
 _WHITE = (245, 245, 245)
 
 
+# macOS virtual key codes. Option turns letters into other characters (Option+Q
+# types "œ"), so pynput's GlobalHotKeys, which matches characters, never fires
+# there: the shortcuts are matched on the physical key instead.
+_MAC_VK = {"q": 12, "p": 35, "c": 8, "<space>": 49}
+_MAC_MODS = {
+    keyboard.Key.ctrl: "ctrl",
+    keyboard.Key.ctrl_l: "ctrl",
+    keyboard.Key.ctrl_r: "ctrl",
+    keyboard.Key.alt: "alt",
+    keyboard.Key.alt_l: "alt",
+    keyboard.Key.alt_r: "alt",
+}
+
+
+def _mac_hotkeys(actions: dict) -> keyboard.Listener:
+    by_vk = {_MAC_VK[key]: action for key, action in actions.items()}
+    held: set[str] = set()
+
+    def vk(key) -> int | None:
+        # A letter arrives as a KeyCode, Space as a Key whose value holds it.
+        return getattr(key, "vk", None) or getattr(getattr(key, "value", None), "vk", None)
+
+    def press(key) -> None:
+        if key in _MAC_MODS:
+            held.add(_MAC_MODS[key])
+        elif held == {"ctrl", "alt"} and vk(key) in by_vk:
+            by_vk[vk(key)]()
+
+    def release(key) -> None:
+        held.discard(_MAC_MODS.get(key))
+
+    return keyboard.Listener(on_press=press, on_release=release)
+
+
 class CelebrimborApp:
     def __init__(self, cfg: Config, bindings: dict[str, dict] | None = None):
         self.cfg = cfg
@@ -50,15 +85,17 @@ class CelebrimborApp:
         self._hands: list = []
 
     # --- global hotkeys ----------------------------------------------------
-    def _make_hotkeys(self) -> keyboard.GlobalHotKeys:
-        return keyboard.GlobalHotKeys(
-            {
-                "<ctrl>+<alt>+q": self.stop,
-                "<ctrl>+<alt>+p": self.toggle_pause,
-                "<ctrl>+<alt>+<space>": self.swap_dominant,
-                "<ctrl>+<alt>+c": self.recalibrate,
-            }
-        )
+    def _make_hotkeys(self) -> keyboard.Listener:
+        """Ctrl+Alt+key, global: Ctrl+Option+key on a Mac."""
+        actions = {
+            "q": self.stop,
+            "p": self.toggle_pause,
+            "<space>": self.swap_dominant,
+            "c": self.recalibrate,
+        }
+        if sys.platform == "darwin":
+            return _mac_hotkeys(actions)
+        return keyboard.GlobalHotKeys({f"<ctrl>+<alt>+{k}": f for k, f in actions.items()})
 
     def stop(self) -> None:
         self.running = False

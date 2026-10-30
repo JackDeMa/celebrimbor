@@ -150,7 +150,10 @@ def print_reference() -> None:
     print("\nActions usable as a string:\n")
     for alias in sorted(bindings_mod.ALIASES):
         print(f"  {alias}")
-    print("  <key combination>   e.g. \"alt+tab\", \"ctrl+win+left\", \"play_pause\"")
+    print("\nShortcuts that send the Windows or the macOS combination as fits:\n")
+    for name, combo in bindings_mod.PORTABLE_KEYS.items():
+        print(f"  {name:<24} here: {combo}")
+    print("\n  <key combination>   e.g. \"alt+tab\", \"ctrl+win+left\", \"play_pause\"")
     print("\nActions in extended form: hotkey, scroll, volume, click, axis.")
     print("See the README for the parameters of each one.")
     print(

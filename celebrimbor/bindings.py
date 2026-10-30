@@ -54,10 +54,12 @@ DEFAULT_TEXT = """{
     // "pinch_ring_tap": "double_click",
 
     // --- closed fist flicked in a direction ---
-    "fist_swipe_left": "ctrl+win+left",
-    "fist_swipe_right": "ctrl+win+right",
-    "fist_swipe_up": "alt+tab",
-    "fist_swipe_down": "alt+shift+tab",
+    // next_window, prev_window, next_desktop, prev_desktop, show_desktop send
+    // the right shortcut on Windows and on macOS alike.
+    "fist_swipe_left": "prev_desktop",
+    "fist_swipe_right": "next_desktop",
+    "fist_swipe_up": "next_window",
+    "fist_swipe_down": "prev_window",
 
     // --- fist closed and still for 5 seconds ---
     "fist_hold": "play_pause",
@@ -76,7 +78,7 @@ DEFAULT_TEXT = """{
     // unbind all four and the pose goes back to being just a hand in front of
     // the camera, free to point and click.
     "three_finger_vertical": { "action": "volume", "gain": 14 },
-    // "three_finger_horizontal": { "action": "axis", "positive": "ctrl+win+right", "negative": "ctrl+win+left", "gain": 3, "max_rate": 2 },
+    // "three_finger_horizontal": { "action": "axis", "positive": "next_desktop", "negative": "prev_desktop", "gain": 3, "max_rate": 2 },
     "three_finger_circle_cw": "next_track",
     "three_finger_circle_ccw": "prev_track"
   },
@@ -111,6 +113,17 @@ DEFAULT_TEXT = """{
   }
 }
 """
+
+# The same intent on either system: these names send the Windows shortcut on
+# Windows and the macOS one on a Mac, so one gestures.json fits both.
+_MAC = sys.platform == "darwin"
+PORTABLE_KEYS = {
+    "next_window": "cmd+tab" if _MAC else "alt+tab",
+    "prev_window": "cmd+shift+tab" if _MAC else "alt+shift+tab",
+    "next_desktop": "ctrl+right" if _MAC else "ctrl+win+right",
+    "prev_desktop": "ctrl+left" if _MAC else "ctrl+win+left",
+    "show_desktop": "f11" if _MAC else "win+d",
+}
 
 # Shorthands usable as a string in place of an object.
 ALIASES = {
@@ -167,7 +180,7 @@ def build_action(spec) -> Action:
         if alias:
             return alias()
         # Everything else is a key combination: "alt+tab", "play_pause".
-        return Hotkey(spec)
+        return Hotkey(PORTABLE_KEYS.get(spec.strip().lower(), spec))
 
     if not isinstance(spec, dict):
         raise ConfigError(f"invalid action: {spec!r}")

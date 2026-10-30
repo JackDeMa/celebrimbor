@@ -21,7 +21,9 @@ were elevated by UAC (nor over the secure desktop).
 import ctypes
 import sys
 import tkinter as tk
-from ctypes import wintypes
+
+if sys.platform == "win32":
+    from ctypes import wintypes
 
 from .face import FACE_SLOT
 from .hand import HAND_SLOTS

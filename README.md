@@ -1,6 +1,7 @@
 # Celebrimbor
 
-**Control your Windows PC with hand gestures and a webcam.**
+**Control your computer with hand gestures and a webcam.** Windows and macOS
+(Apple Silicon).
 
 Move the mouse, the volume and the windows by moving your hand in front of the
 camera - or point with your **head** or your **eyes** and click with a wink.
@@ -33,6 +34,16 @@ python -m venv .venv
 .venv\Scripts\python.exe main.py
 ```
 
+On macOS:
+
+```
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python main.py
+```
+
+See [macOS](#macos) for the permissions it needs.
+
 ## Recognised gestures
 
 | Gesture | Name in the JSON | Default action |
@@ -42,10 +53,10 @@ python -m venv .venv
 | Pinch **thumb + index** held > 0.45 s | `pinch_index_hold` | Drag |
 | Pinch **thumb + middle**, short tap | `pinch_middle_tap` | Right click |
 | Pinch **thumb + ring** | `pinch_ring_tap` / `_hold` | *(available, not bound - a good spot for `double_click`)* |
-| **Fist** flicked left | `fist_swipe_left` | `Ctrl+Win+Left` (previous desktop) |
-| **Fist** flicked right | `fist_swipe_right` | `Ctrl+Win+Right` (next desktop) |
-| **Fist** flicked up | `fist_swipe_up` | `Alt+Tab` |
-| **Fist** flicked down | `fist_swipe_down` | `Alt+Shift+Tab` |
+| **Fist** flicked left | `fist_swipe_left` | `prev_window` (`Alt+Shift+Tab` / `Cmd+Shift+Tab`) |
+| **Fist** flicked right | `fist_swipe_right` | `next_window` (`Alt+Tab` / `Cmd+Tab`) |
+| **Fist** flicked up | `fist_swipe_up` | `show_desktop` (`Win+D` / `F11`) |
+| **Fist** flicked down | `fist_swipe_down` | `show_desktop` (`Win+D` / `F11`) |
 | **Fist** closed and still for 5 s | `fist_hold` | Play / Pause |
 | **Index + middle** open, hand up/down | `two_finger_vertical` | Scroll, like the wheel |
 | **Index + middle** open, hand right/left | `two_finger_horizontal` | Volume up / down |
@@ -282,7 +293,7 @@ comments (local extension: plain JSON does not have them).
   "bindings": {
     "point_move": "move_cursor",
     "pinch_index_tap": "left_click",
-    "fist_swipe_up": "alt+tab",
+    "fist_swipe_up": "next_window",
     "fist_hold": "play_pause",
     "two_finger_vertical":     { "action": "scroll", "gain": 55 },
     "two_finger_horizontal":   { "action": "volume", "gain": 14 },
@@ -316,9 +327,22 @@ python main.py --list-gestures
 | `scroll`, `scroll_h` | Vertical / horizontal wheel |
 | `volume` | Volume up/down, proportional to the movement |
 | `none` | Disables the gesture |
+| `next_window`, `prev_window`, `next_desktop`, `prev_desktop`, `show_desktop` | The shortcut for it on the system in use (table below) |
 | any key combination | `"alt+tab"`, `"ctrl+win+left"`, `"win+d"`, `"play_pause"`, `"volume_up"`, `"mute"`, `"next_track"`, `"f5"` |
 
-Valid modifiers: `ctrl`, `alt`, `shift`, `win`. Special keys: arrows, `tab`,
+The portable names send the right combination on each system, so one
+`gestures.json` works on both:
+
+| Name | Windows | macOS |
+|---|---|---|
+| `next_window` | `Alt+Tab` | `Cmd+Tab` |
+| `prev_window` | `Alt+Shift+Tab` | `Cmd+Shift+Tab` |
+| `next_desktop` | `Ctrl+Win+Right` | `Ctrl+Right` (next Space) |
+| `prev_desktop` | `Ctrl+Win+Left` | `Ctrl+Left` (previous Space) |
+| `show_desktop` | `Win+D` | `F11` |
+
+Valid modifiers: `ctrl`, `alt`, `shift`, `win` (`cmd` on a Mac - `win`, `cmd`
+and `super` are the same key). Special keys: arrows, `tab`,
 `enter`, `esc`, `space`, `home`, `end`, `pageup`, `pagedown`, `delete`,
 `f1`-`f20`, plus the media keys (`play_pause`, `stop`, `next_track`,
 `prev_track`, `volume_up`, `volume_down`, `mute`).
@@ -340,8 +364,8 @@ three fingers horizontally (the axis left free by the defaults):
 ```jsonc
 "three_finger_horizontal": {
   "action": "axis",
-  "positive": "ctrl+win+right",
-  "negative": "ctrl+win+left",
+  "positive": "next_desktop",
+  "negative": "prev_desktop",
   "gain": 6,
   "max_rate": 3
 }
@@ -366,7 +390,7 @@ Every gesture has a kind, and only accepts compatible actions:
 
 | Key | Effect |
 |---|---|
-| `Ctrl+Alt+Q` | Quit (global, works even without window focus) |
+| `Ctrl+Alt+Q` | Quit (global, works even without window focus; `Ctrl+Option` on a Mac) |
 | `Ctrl+Alt+P` | Pause / resume control (global) |
 | `Ctrl+Alt+Space` | Move the pointer to the other hand (global) |
 | `Ctrl+Alt+C` | Calibrate the head / eye pointer again (global) |
@@ -389,6 +413,43 @@ frame in three for this alone; not with `--hands 1`, which only ever sees one.
 
 The preview window has a column on the right with the gestures currently
 bound to the pointer and the keys above.
+
+## macOS
+
+Celebrimbor runs on Macs with Apple Silicon (M1 and later). The release zip
+`celebrimbor-<version>-macos-arm64.zip` holds a `celebrimbor` folder: run
+`./celebrimbor` inside it from Terminal.
+
+**First launch.** The app is not signed, so Gatekeeper blocks it, and every
+library inside the folder with it. Clear the download flag once:
+
+```
+xattr -dr com.apple.quarantine celebrimbor
+```
+
+**Permissions.** macOS asks for them on first use, or grant them in System
+Settings → Privacy & Security, to **Terminal** (or whatever app you start
+Celebrimbor from):
+
+| Permission | What for |
+|---|---|
+| Camera | The webcam |
+| Accessibility | Moving the mouse, clicking, sending keys |
+| Input Monitoring | The global `Ctrl+Option` shortcuts |
+
+Without Accessibility the program runs, sees you, and does nothing: the cursor
+does not move. Restart Terminal after granting a permission.
+
+**Differences from Windows:**
+- The global shortcuts are `Ctrl+Option+Q / P / C / Space`.
+- Use the portable names (`next_window`, `show_desktop`, ...) in
+  `gestures.json` and the fist flicks do the Mac thing: `Cmd+Tab`, Spaces,
+  `F11`. Combinations written out by hand, such as `"alt+tab"`, are sent as
+  written.
+- `show_desktop` sends `F11`: it works when *Show Desktop* is bound to F11 in
+  System Settings → Keyboard → Keyboard Shortcuts → Mission Control (the
+  default).
+- No always-on-top overlay: the preview window is the only HUD.
 
 ## Command-line options
 
@@ -438,7 +499,8 @@ of the hand that fired them.
 The preview window ends up behind whatever you are actually working in, which is
 exactly when you would want to know what the program thinks your hands are
 doing. So there is also a small card in the bottom-right corner of the screen,
-above every other window, with the mode of each hand and the last events:
+above every other window, with the mode of each hand and the last events
+(Windows only, for now):
 
 ```
 L  TWO FINGERS
