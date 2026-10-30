@@ -12,6 +12,7 @@ cursor follows the head or the eyes ("pointer" in settings).
 """
 
 import json
+import sys
 from dataclasses import fields
 from pathlib import Path
 
@@ -22,7 +23,12 @@ from .face_gestures import FACE_GESTURE_KINDS
 from .gestures import GESTURE_KINDS
 from .hand import HAND_SLOTS
 
-DEFAULT_PATH = Path(__file__).resolve().parent.parent / "gestures.json"
+# Next to celebrimbor.exe when frozen, where the user can find and edit it.
+DEFAULT_PATH = (
+    Path(sys.executable).parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent.parent
+) / "gestures.json"
 
 DEFAULT_TEXT = """{
   // Celebrimbor gesture configuration.
@@ -94,7 +100,10 @@ DEFAULT_TEXT = """{
     "wink_left_tap": "left_click",
     // The same wink held for "face_hold" seconds: drag until the eye reopens.
     "wink_left_hold": "drag",
-    "wink_right_tap": "right_click"
+    "wink_right_tap": "right_click",
+    // Mouth open: the cursor stops and moving the head scrolls instead.
+    // Add "mouth_scroll_horizontal" for sideways scrolling too.
+    "mouth_scroll_vertical": { "action": "scroll", "gain": 40 }
     // For whoever cannot wink one eye at a time:
     // "mouth_open_tap": "left_click", "mouth_open_hold": "drag",
     // Both eyes shut for "blink_long_seconds":
@@ -124,6 +133,7 @@ DEFAULT_FACE_BINDINGS = {
     "wink_left_tap": "left_click",
     "wink_left_hold": "drag",
     "wink_right_tap": "right_click",
+    "mouth_scroll_vertical": {"action": "scroll", "gain": 40},
 }
 
 

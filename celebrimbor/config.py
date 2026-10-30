@@ -133,9 +133,9 @@ class Config:
     # measured from there, so no particular way of sitting is assumed.
     face_calibration_seconds: float = 1.5
     # Head rotation, in eye distances of nose travel, that takes the cursor
-    # from the centre to the edge of the screen: about 0.18 is 20 degrees.
-    head_range_x: float = 0.18
-    head_range_y: float = 0.12
+    # from the centre to the edge of the screen: about 0.15 is 17 degrees.
+    head_range_x: float = 0.15
+    head_range_y: float = 0.10
     # Pupil travel, in eye widths, that does the same. The eye covers a screen
     # with a tiny movement and a webcam sees it at a few pixels: expect to aim
     # at buttons, not at characters.
@@ -143,7 +143,7 @@ class Config:
     eyes_range_y: float = 0.08
     # In eyes mode the head turning counts too, weighted by this: you rarely
     # look at a corner without turning a little towards it. 0 = pupils only.
-    eyes_head_gain: float = 0.5
+    eyes_head_gain: float = 0.7
     # One Euro cutoff of the face cursor, per pointer: the pupils jitter far
     # more than the head and need much heavier smoothing.
     head_min_cutoff: float = 1.0

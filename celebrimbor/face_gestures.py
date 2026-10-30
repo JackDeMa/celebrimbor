@@ -37,7 +37,10 @@ FACE_GESTURE_KINDS: dict[str, str] = {
     "blink_long": "trigger",
     "mouth_open_tap": "trigger",
     "mouth_open_hold": "hold",
+    "mouth_scroll_vertical": "axis",
+    "mouth_scroll_horizontal": "axis",
 }
+MOUTH_SCROLLS = ("mouth_scroll_vertical", "mouth_scroll_horizontal")
 
 
 @dataclass
@@ -133,6 +136,10 @@ class FaceRecognizer:
         }
         self._mouth = _Switch("mouth_open", active, cfg.wink_min, cfg.wink_max, cfg.face_hold)
         self._mouth_is_open = False
+        # With the mouth open the face's movement scrolls instead of moving
+        # the cursor, which stays where it was.
+        self._scrolls = [name for name in MOUTH_SCROLLS if name in active]
+        self._scroll_last: tuple[float, float] | None = None
         self._blink_long = "blink_long" in active
         # Eyes that have to reopen before they can wink: after a blink with
         # both, one of them always lets go a frame before the other, and that
@@ -178,6 +185,7 @@ class FaceRecognizer:
         for switch in (*self._winks.values(), self._mouth):
             events += switch.cancel()
         self._mouth_is_open = False
+        self._scroll_last = None
         self._spoiled.clear()
         self._both_since = None
         self._blink_long_done = False
@@ -219,7 +227,15 @@ class FaceRecognizer:
             or any(s.pending for s in self._winks.values() if s.bound)
             or (self._mouth.pending and self._mouth.bound)
         )
-        if waiting and not holding:
+        if self.scrolling and not holding:
+            # Frozen like for a wink, while the head (or the eyes) scroll.
+            if self._frozen is None:
+                self._frozen = self._rewound(t)
+            self._settle_until = t + self.cfg.face_settle
+            point = self._frozen
+            events += self._scroll(feats, closed, t)
+        elif waiting and not holding:
+            self._scroll_last = None
             # Back to where the cursor was before the eyelid started dropping,
             # and kept there until it is open again.
             if self._frozen is None:
@@ -227,8 +243,10 @@ class FaceRecognizer:
             self._settle_until = t + self.cfg.face_settle
             point = self._frozen
         elif t < self._settle_until:
+            self._scroll_last = None
             point = self._frozen
         else:
+            self._scroll_last = None
             self._frozen = None
             target = self._target(feats, closed)
             point = None
@@ -326,8 +344,12 @@ class FaceRecognizer:
             events += wink.update(winking, t)
         return events
 
+    @property
+    def scrolling(self) -> bool:
+        return bool(self._scrolls) and self._mouth_is_open
+
     def _mouth_gesture(self, feats: FaceFeatures, t: float) -> list[GestureEvent]:
-        if not self._mouth.bound:
+        if not (self._mouth.bound or self._scrolls):
             return []
         if self._mouth_is_open:
             self._mouth_is_open = feats.mouth_open > self.cfg.mouth_open_off
@@ -368,6 +390,29 @@ class FaceRecognizer:
             min(max(0.5 + 0.5 * v, 0.0), 1.0),
         )
 
+    def _scroll(
+        self, feats: FaceFeatures, closed: dict[str, bool], t: float
+    ) -> list[GestureEvent]:
+        """The pointer's movement since last frame, as scroll: up/right positive."""
+        target = self._target(feats, closed)
+        if target is None:
+            return []
+        # Through the cursor filter, which keeps it warm for when the mouth
+        # closes and the cursor picks up from the face's current aim.
+        x, y = self.cursor_filter(target[0], target[1], t)
+        last, self._scroll_last = self._scroll_last, (x, y)
+        if last is None:
+            return []
+        deltas = {
+            "mouth_scroll_vertical": last[1] - y,
+            "mouth_scroll_horizontal": x - last[0],
+        }
+        return [
+            GestureEvent(name, "axis", deltas[name])
+            for name in self._scrolls
+            if abs(deltas[name]) >= self.cfg.axis_deadzone
+        ]
+
     def _rewound(self, t: float) -> tuple[float, float] | None:
         """The cursor as it was `face_rewind` seconds ago (or as far back as known)."""
         if not self._history:
@@ -380,6 +425,8 @@ class FaceRecognizer:
     def _mode(self, closed: dict[str, bool], holding: bool) -> str:
         if holding:
             return "DRAG"
+        if self.scrolling:
+            return "SCROLL"
         if all(closed.values()):
             return "BLINK"
         for side in EYE_SIDES:
@@ -395,6 +442,8 @@ class FaceRecognizer:
                 return f"wink {side}: reopen to drop"
         if self._mouth.holding:
             return "close the mouth to drop"
+        if self.scrolling:
+            return "close the mouth to stop scrolling"
         if any(w.pending for w in self._winks.values()):
             return "reopen to click"
         return ""

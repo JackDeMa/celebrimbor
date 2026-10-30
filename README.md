@@ -205,9 +205,9 @@ python main.py --pointer eyes     # the cursor goes where you look
 or `"pointer": "head"` in `settings`. On the first run the
 `face_landmarker.task` model (~4 MB) is downloaded into `models/`.
 
-- **`head`** - turn your head and the cursor follows, about 20 degrees from the
+- **`head`** - turn your head and the cursor follows, about 17 degrees from the
   centre to the edge of the screen. Steady and precise: the one to start with.
-- **`eyes`** - the pupils, measured against the corners of each eye, plus half
+- **`eyes`** - the pupils, measured against the corners of each eye, plus most
   of the head's turn (you rarely look at a corner without turning towards it a
   little). Hands-free and nearly head-free, but a webcam sees the pupil at a
   handful of pixels: it aims at buttons and icons, not at characters, and it
@@ -233,6 +233,8 @@ focused) and calibrate again.
 | Both eyes shut for 0.8 s | `blink_long` | *(available, not bound - `double_click` fits)* |
 | Mouth opened and closed | `mouth_open_tap` | *(available, not bound)* |
 | Mouth held open | `mouth_open_hold` | *(available, not bound)* |
+| Mouth open, head moving up / down | `mouth_scroll_vertical` | Scroll: the cursor stops, the head scrolls |
+| Mouth open, head moving left / right | `mouth_scroll_horizontal` | *(available, not bound - `scroll_h` fits)* |
 
 - **Blinking never clicks.** An ordinary blink shuts both eyes, and a wink is
   one eye shut *with the other open*. A blink ends with one eye reopening a
@@ -524,7 +526,7 @@ overridden from the `settings` section of the JSON:
 - `pointer` - `hand`, `head` or `eyes`.
 - `face_calibration_seconds` - how long the neutral pose is measured.
 - `head_range_x` / `head_range_y` - nose travel, in eye distances, from the
-  centre to the edge of the screen (0.18 is about 20 degrees of head turn).
+  centre to the edge of the screen (0.15 is about 17 degrees of head turn).
   Lower them to move your head less.
 - `eyes_range_x` / `eyes_range_y` - pupil travel, in eye widths, that does the
   same. `eyes_head_gain` - how much the head's turn counts in eyes mode (0 =
