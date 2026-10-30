@@ -152,6 +152,8 @@ class FaceRecognizer:
         self._history: deque[tuple[float, float, float]] = deque()  # (t, x, y)
         self._frozen: tuple[float, float] | None = None
         self._settle_until = 0.0
+        # (cursor, nose) when an eye shut in eyes mode: the nose steers from there
+        self._nose_anchor: tuple[tuple[float, float], tuple[float, float]] | None = None
 
         # calibration
         self.neutral: tuple[tuple[float, float], tuple[float, float]] | None = None
@@ -177,6 +179,7 @@ class FaceRecognizer:
         self.cursor_filter.reset()
         self._history.clear()
         self._frozen = None
+        self._nose_anchor = None
         self._settle_until = 0.0
         return events
 
@@ -227,6 +230,13 @@ class FaceRecognizer:
             or any(s.pending for s in self._winks.values() if s.bound)
             or (self._mouth.pending and self._mouth.bound)
         )
+        # Eyes pointer with an eye shut, for a click or a drag: the lid drags
+        # its pupil and the open eye's tends to follow, so only the nose steers.
+        nose_only = self.pointer == "eyes" and (
+            any(closed.values()) or any(w.down_at is not None for w in self._winks.values())
+        )
+        if not nose_only:
+            self._nose_anchor = None
         if self.scrolling and not holding:
             # Frozen like for a wink, while the head (or the eyes) scroll.
             if self._frozen is None:
@@ -234,6 +244,12 @@ class FaceRecognizer:
             self._settle_until = t + self.cfg.face_settle
             point = self._frozen
             events += self._scroll(feats, closed, t)
+        elif nose_only:
+            self._scroll_last = None
+            point = self._nose_steer(feats, t)
+            # Held there for `face_settle` once the eye reopens.
+            self._frozen = point
+            self._settle_until = t + self.cfg.face_settle
         elif waiting and not holding:
             self._scroll_last = None
             # Back to where the cursor was before the eyelid started dropping,
@@ -412,6 +428,24 @@ class FaceRecognizer:
             for name in self._scrolls
             if abs(deltas[name]) >= self.cfg.axis_deadzone
         ]
+
+    def _nose_steer(self, feats: FaceFeatures, t: float) -> tuple[float, float] | None:
+        """From where the cursor was before the eye shut, moved by the nose alone.
+
+        The nose moves it as much as it would in head mode.
+        """
+        if self._nose_anchor is None:
+            start = self._rewound(t)
+            if start is None:
+                return None
+            self._nose_anchor = (start, feats.head)
+            # Restarted on the anchor, so the cursor does not glide back to it.
+            self.cursor_filter.reset()
+        (x0, y0), (hx0, hy0) = self._nose_anchor
+        c = self.cfg
+        x = x0 + 0.5 * (feats.head[0] - hx0) / max(c.head_range_x, 1e-6)
+        y = y0 + 0.5 * (feats.head[1] - hy0) / max(c.head_range_y, 1e-6)
+        return self.cursor_filter(min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0), t)
 
     def _rewound(self, t: float) -> tuple[float, float] | None:
         """The cursor as it was `face_rewind` seconds ago (or as far back as known)."""

@@ -251,8 +251,9 @@ focused) and calibrate again.
   threshold: it works with narrow eyes, wide eyes and glasses alike. The
   `LEYE` / `REYE` bars in the preview show each eye's opening, with the red
   tick where it counts as shut.
-- **During a wink-drag the cursor moves**: with `--pointer eyes` it follows the
-  one eye left open.
+- **With an eye shut only the nose steers**: with `--pointer eyes`, during a
+  wink (click) or a wink-drag the pupils are ignored - the lid drags them - and
+  the cursor moves from where it was with the nose alone, as in head mode.
 - **Not everyone can wink one eye at a time.** Bind the mouth instead:
   `"mouth_open_tap": "left_click", "mouth_open_hold": "drag"` - mind that it
   then fires when you talk or yawn.
