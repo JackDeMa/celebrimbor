@@ -28,32 +28,36 @@ _MODIFIERS = {
     "super": Key.cmd,
 }
 
-_NAMED_KEYS = {
-    "up": Key.up,
-    "down": Key.down,
-    "left": Key.left,
-    "right": Key.right,
-    "tab": Key.tab,
-    "enter": Key.enter,
-    "esc": Key.esc,
-    "escape": Key.esc,
-    "space": Key.space,
-    "backspace": Key.backspace,
-    "delete": Key.delete,
-    "home": Key.home,
-    "end": Key.end,
-    "pageup": Key.page_up,
-    "pagedown": Key.page_down,
-    "insert": Key.insert,
-    "play_pause": Key.media_play_pause,
-    "stop": Key.media_stop,
-    "next_track": Key.media_next,
-    "prev_track": Key.media_previous,
-    "volume_up": Key.media_volume_up,
-    "volume_down": Key.media_volume_down,
-    "mute": Key.media_volume_mute,
+# name in gestures.json -> pynput Key attribute. Not every key exists on every
+# system (a Mac has no Insert): the missing ones are left out, and binding one
+# is reported as an unknown key.
+_KEY_ATTRS = {
+    "up": "up",
+    "down": "down",
+    "left": "left",
+    "right": "right",
+    "tab": "tab",
+    "enter": "enter",
+    "esc": "esc",
+    "escape": "esc",
+    "space": "space",
+    "backspace": "backspace",
+    "delete": "delete",
+    "home": "home",
+    "end": "end",
+    "pageup": "page_up",
+    "pagedown": "page_down",
+    "insert": "insert",
+    "play_pause": "media_play_pause",
+    "stop": "media_stop",
+    "next_track": "media_next",
+    "prev_track": "media_previous",
+    "volume_up": "media_volume_up",
+    "volume_down": "media_volume_down",
+    "mute": "media_volume_mute",
+    **{f"f{i}": f"f{i}" for i in range(1, 21)},
 }
-_NAMED_KEYS.update({f"f{i}": getattr(Key, f"f{i}") for i in range(1, 21)})
+_NAMED_KEYS = {name: getattr(Key, attr) for name, attr in _KEY_ATTRS.items() if hasattr(Key, attr)}
 
 
 class UnknownKeyError(ValueError):
