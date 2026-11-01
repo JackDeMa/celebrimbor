@@ -269,11 +269,11 @@ focused) and calibrate again.
   `"mouth_open_tap": "left_click", "mouth_open_hold": "drag"` - mind that it
   then fires when you talk or yawn.
 
-**The hands keep working.** With the face in charge they only lose the cursor:
-pinching still clicks, two fingers still scroll, the fist still switches
-windows. Aim with the head and pinch to click, if you prefer that to winking.
-To track the face alone, and save most of the CPU of the hand model, use
-`--hands 0`: the hands are then only watched for the pause fists.
+**The hands keep working.** With the face on they keep every gesture, and a
+hand pointing in view takes the cursor until it leaves the frame. Aim with the
+head and pinch to click, if you prefer that to winking. To track the face
+alone, and save most of the CPU of the hand model, switch `HAND` off in the
+preview (or `--hands 0`): the hands are then only watched for the pause fists.
 
 The face tracker follows **one face**, the most prominent: someone walking past
 behind you cannot take the cursor.
@@ -411,8 +411,13 @@ resumes. Two fists are reserved for this: while both are closed the hands do
 nothing else. It works with `--hands 0` too, where the hands are watched one
 frame in three for this alone; not with `--hands 1`, which only ever sees one.
 
-The preview window has a column on the right with the gestures currently
-bound to the pointer and the keys above.
+**Pausing with the real mouse.** Moving the physical mouse pauses on its own
+(`PAUSED · MOUSE`), so the two never fight over the cursor; control comes back
+once the mouse has been still for 3 seconds (`mouse_pause_seconds`, 0 turns it
+off). A manual pause (`Ctrl+Alt+P`, `p`, the fists) is never lifted this way,
+only by hand; pausing by hand during a mouse pause makes it stick too.
+
+The preview window lists the gestures currently bound and the keys above.
 
 ## macOS
 
@@ -482,17 +487,61 @@ Command-line options take precedence over the `settings` section of the JSON.
 
 ## Preview
 
-The window shows the hand skeletons, the rectangle of the **active area** (the
-portion of the frame mapped onto the whole screen), the current mode of each
-hand with the reference point in use, the fps, the `IDX` / `MID` / `RNG` bars
-with each pinch distance (red tick = click threshold, grey tick = palm anchoring
-threshold) and the `FIST STILL` bar while you hold your fist closed. Only the
-bars of pinches actually bound to an action are shown.
+A dark window, the same on Windows and macOS (CustomTkinter). On the left the
+camera image, with a status bar above it - what each hand and the face is
+doing, a dot on whoever holds the cursor, `PAUSED` / `DRY-RUN`, the fps - and
+the last events underneath. On the right the controls and the gesture list.
 
-The readouts are split in two columns, `L` on the left and `R` on the right,
-each on the same side of the frame as its hand; an asterisk marks the hand
-holding the pointer. Recognised events are listed on the right with the initial
-of the hand that fired them.
+On the image itself: the hand and face skeletons, the rectangle of the
+**active area** (the portion of the frame mapped onto the whole screen), the
+reference point in use, the `IDX` / `MID` / `RNG` bars with each pinch distance
+(red tick = click threshold, grey tick = palm anchoring threshold), the
+`FIST STILL` bar while you hold your fist closed, the `LEYE` / `REYE` bars and
+the calibration and pause progress. Only the bars of pinches actually bound to
+an action are shown.
+
+**Inputs.** Three switches, each on or off on its own, applied at once:
+
+| On | The cursor follows |
+|---|---|
+| Hand | The index finger |
+| Head / nose | The nose, as a joystick |
+| Eyes / pupils | The pupils alone |
+| Head + Eyes | The pupils plus the head's turn (what `--pointer eyes` does) |
+| Hand + Head / Eyes | A hand pointing in view takes the cursor; out of view, the face has it back |
+
+Switching the head or the eyes on starts with the calibration: look at the
+centre of the screen. With the hand off the hands do nothing but the pause
+fists. In `gestures.json` they are `use_hand`, `use_head`, `use_eyes`;
+`--pointer` and `--hands 0` on the command line still work and win over them.
+
+**Cursor.** Three steppers, one step per click. The value between `-` and `+`
+is a field too: type any number and press Enter (or click elsewhere) to apply
+it, Esc to give up.
+
+| Control | Effect |
+|---|---|
+| Steady `-` / `+` | Less / more smoothing: `+` keeps the cursor calmer when you are still, at the cost of a little lag. The number is the steadiness (1 / cutoff) |
+| Speed `-` / `+` | How fast a real movement has to be before the smoothing lets go: `+` = more responsive on quick moves |
+| Deadzone `-` / `+` | Screen pixels ignored, one per click: a tremor smaller than this does not move the cursor at all (`cursor_deadband`, default 3) |
+| Reset | All three back to the values the program started with |
+| Save | Writes the switches and the three values into `settings` in `gestures.json`, so they stick |
+
+Steady steps through 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 15, 20 and
+Speed through 0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10,
+15, 20: round numbers, finer where a small change is felt. A value saved off
+these steps snaps to the nearest one in the direction pressed. Steady and Speed
+tune the face (`head_min_cutoff` or `eyes_min_cutoff`, `face_beta`) when the
+head or the eyes are on, the hand (`min_cutoff`, `beta`) otherwise - the line
+under *Cursor* says which; see [Tuning](#tuning). A high Speed lets tremor
+through as if it were movement: lower it before raising Steady.
+
+The deadzone does not snap: past its radius the cursor is pulled along on a
+leash that long, so it never jumps, it just trails a real movement by a few
+pixels. It applies to whatever drives the cursor, hand or face. Sensible
+values: 3-10 px for the hand; for the head 20-40 px, more with a high gain
+(a small `head_range`), where one camera pixel of noise already moves the
+cursor by tens of screen pixels.
 
 ## Always-on-top overlay
 
@@ -597,7 +646,9 @@ overridden from the `settings` section of the JSON:
 
 ### Head and eye pointer
 
-- `pointer` - `hand`, `head` or `eyes`.
+- `use_hand` / `use_head` / `use_eyes` - the inputs, `true` or `false` (the
+  Hand / Head / Eyes switches). Left out, they follow `pointer`.
+- `pointer` - `hand`, `head` or `eyes`: the older way of choosing.
 - `face_calibration_seconds` - how long the neutral pose is measured.
 - `head_range_x` / `head_range_y` - nose travel, in eye distances, from the
   centre to the edge of the screen (0.15 is about 17 degrees of head turn).
@@ -610,6 +661,8 @@ overridden from the `settings` section of the JSON:
   cutoff. Lower cutoff = steadier when still; higher beta = less lag on fast
   movements.
 - `pause_fists_seconds` - how long both fists must stay closed to pause.
+- `mouse_pause_seconds` - how long the real mouse must rest before an automatic
+  pause lifts; 0 never pauses for the mouse.
 - `eye_window` / `eye_closed_ratio` / `eye_open_ratio` - when an eye counts as
   shut, relative to its habitual opening.
 - `wink_min` / `wink_max` / `face_hold` / `blink_long_seconds` - how long a wink
@@ -675,7 +728,9 @@ its own licence. The credit for the hand recognition goes entirely to MediaPipe.
 | [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Google | Apache 2.0 | Hand detection and the 21 landmarks |
 | `hand_landmarker.task` model | Google | Apache 2.0 | Detector weights, downloaded from `storage.googleapis.com/mediapipe-models` |
 | `face_landmarker.task` model | Google | Apache 2.0 | Face and iris landmarks for the head / eye pointer, downloaded the same way |
-| [OpenCV](https://opencv.org/) (`opencv-python`) | OpenCV team | Apache 2.0 | Webcam capture and preview window |
+| [OpenCV](https://opencv.org/) (`opencv-python`) | OpenCV team | Apache 2.0 | Webcam capture and drawing on the image |
+| [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) | Tom Schimansky | MIT | The preview window |
+| [Pillow](https://python-pillow.github.io/) | Jeffrey A. Clark and contributors | MIT-CMU | Handing the camera image to the window |
 | [pynput](https://github.com/moses-palmer/pynput) | Moses Palmér | LGPL v3 | Mouse and keyboard control, global hotkeys |
 | [NumPy](https://numpy.org/) | NumPy developers | BSD 3-Clause | Numerical foundation (dependency of OpenCV and MediaPipe) |
 

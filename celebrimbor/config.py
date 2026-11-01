@@ -40,6 +40,9 @@ class Config:
     min_cutoff: float = 1.2   # lower = smoother but slower
     beta: float = 0.03        # higher = less latency on fast movements
     d_cutoff: float = 1.0
+    # Screen pixels the cursor ignores, whatever drives it: a tremor smaller
+    # than this does not move it at all (DEAD buttons in the preview).
+    cursor_deadband: float = 3.0
 
     # --- pinch (distance normalised by hand size) ---
     pinch_on: float = 0.38    # below this threshold the pinch is closed
@@ -173,10 +176,33 @@ class Config:
     face_rewind: float = 0.20
     face_settle: float = 0.15        # after reopening, before the cursor moves again
 
+    # --- what drives the mouse ---
+    # Each on or off on its own, with the HAND / HEAD / EYES buttons in the
+    # preview too (SAVE writes them here). HEAD and EYES together: the pupils
+    # plus the head's turn. A hand pointing in view takes the cursor from the
+    # face; out of view, the face has it back. None = from "pointer" and
+    # --hands 0, the older way of choosing.
+    use_hand: bool | None = None
+    use_head: bool | None = None
+    use_eyes: bool | None = None
+
+    def resolve_inputs(self) -> None:
+        """Fill the switches left unset from `pointer` and `num_hands`."""
+        if self.use_hand is None:
+            self.use_hand = self.num_hands > 0
+        if self.use_head is None:
+            self.use_head = self.pointer in ("head", "eyes")
+        if self.use_eyes is None:
+            self.use_eyes = self.pointer == "eyes"
+
     # --- pause ---
     # Both fists closed this long: pause or resume, like Ctrl+Alt+P. Watched
     # with --hands 0 too, where the hands are looked at for this alone.
     pause_fists_seconds: float = 3.0
+    # Touching the real mouse pauses on its own; it resumes once the mouse has
+    # been still this long. 0 turns it off. A manual pause (Ctrl+Alt+P, fists)
+    # is never lifted by this: only by hand.
+    mouse_pause_seconds: float = 3.0
 
     # --- misc ---
     show_preview: bool = True

@@ -44,6 +44,7 @@ class MouseActuator:
         self.dragging = False
         self._scroll_accum = 0.0
         self._scroll_accum_h = 0.0
+        self._expected: tuple[float, float] | None = None  # where the cursor should be
 
     # --- movement --------------------------------------------------------
     def move_to(self, x: float, y: float) -> None:
@@ -51,6 +52,23 @@ class MouseActuator:
         py = int(min(max(y, 0.0), 1.0) * (self.screen_h - 1))
         if not self.dry_run:
             self.mouse.position = (px, py)
+            self._expected = (px, py)
+
+    def user_moved(self, tolerance: float = 3.0) -> bool:
+        """Whether the real mouse moved the cursor since the last call.
+
+        The cursor is wherever we last put it, or where it was last seen: any
+        other position means a hand on the physical mouse.
+        """
+        pos = self.mouse.position
+        if pos is None:
+            return False
+        moved = self._expected is not None and (
+            abs(pos[0] - self._expected[0]) > tolerance
+            or abs(pos[1] - self._expected[1]) > tolerance
+        )
+        self._expected = pos
+        return moved
 
     # --- click -----------------------------------------------------------
     def click(self, button: Button = Button.left, count: int = 1) -> bool:

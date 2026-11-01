@@ -61,6 +61,34 @@ class OneEuroFilter:
         return y
 
 
+class Deadband:
+    """Movements smaller than `radius` do not move the output at all.
+
+    The output is pulled along on a leash `radius` long rather than snapped to
+    the input once it gets that far: it never jumps, it only stops trembling,
+    and while moving it trails the input by `radius`.
+    """
+
+    def __init__(self, radius: float = 0.0):
+        self.radius = radius
+        self._p: tuple[float, float] | None = None
+
+    def reset(self) -> None:
+        self._p = None
+
+    def __call__(self, x: float, y: float) -> tuple[float, float]:
+        if self._p is None or self.radius <= 0.0:
+            self._p = (x, y)
+            return self._p
+        px, py = self._p
+        dx, dy = x - px, y - py
+        dist = math.hypot(dx, dy)
+        if dist > self.radius:
+            k = (dist - self.radius) / dist
+            self._p = (px + dx * k, py + dy * k)
+        return self._p
+
+
 class PointFilter:
     """Convenience: applies One Euro to an (x, y) pair."""
 
@@ -71,6 +99,12 @@ class PointFilter:
     def reset(self) -> None:
         self._fx.reset()
         self._fy.reset()
+
+    def tune(self, min_cutoff: float, beta: float) -> None:
+        """New parameters, from the next sample on, with no jump."""
+        for f in (self._fx, self._fy):
+            f.min_cutoff = min_cutoff
+            f.beta = beta
 
     def __call__(self, x: float, y: float, t: float) -> tuple[float, float]:
         return self._fx(x, t), self._fy(y, t)

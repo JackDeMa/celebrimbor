@@ -12,6 +12,7 @@ cursor follows the head or the eyes ("pointer" in settings).
 """
 
 import json
+import re
 import sys
 from dataclasses import fields
 from pathlib import Path
@@ -244,6 +245,36 @@ def apply_settings(cfg: Config, settings: dict) -> list[str]:
             continue
         setattr(cfg, key, value)
     return warnings
+
+
+def save_settings(path: Path | str | None, values: dict[str, float | bool]) -> Path:
+    """Write `values` into the "settings" section, comments and layout kept.
+
+    A key already set is changed in place, a new one goes at the top of the
+    section. The result is parsed before it is written: a file this cannot
+    edit safely is left alone.
+    """
+    path = Path(path) if path else DEFAULT_PATH
+    text = path.read_text(encoding="utf-8")
+    for key, value in values.items():
+        literal = json.dumps(value) if isinstance(value, bool) else f"{value:g}"
+        # Only a line that starts with the key: a commented-out one stays as it is.
+        pattern = rf'(?m)^(\s*"{re.escape(key)}"\s*:\s*)(true|false|null|[-+0-9.eE]+)'
+        text, found = re.subn(pattern, lambda m: m.group(1) + literal, text, count=1)
+        if found:
+            continue
+        section = re.search(r'"settings"\s*:\s*\{', text)
+        if section is None:
+            raise ConfigError(f"{path}: no \"settings\" section to write into")
+        empty = text[section.end():].lstrip().startswith("}")
+        entry = f'\n    "{key}": {literal}' + ("" if empty else ",")
+        text = text[: section.end()] + entry + text[section.end():]
+    try:
+        json.loads(strip_comments(text))
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"{path}: could not update it safely ({exc.msg})") from exc
+    path.write_text(text, encoding="utf-8")
+    return path
 
 
 def build_bindings(

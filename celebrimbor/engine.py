@@ -5,9 +5,9 @@ any state: a pinch on the left hand cannot cancel a drag on the right one. The
 only thing they do share is the mouse, and there is just one cursor: which hand
 is allowed to move it is decided here, frame by frame.
 
-With the face pointer ("pointer": "head" or "eyes") the face has a recogniser
-and bindings of its own, under the "face" slot, and holds the cursor for good:
-the hands keep clicking, scrolling and swiping, but never move it.
+With the head or the eyes switched on the face has a recogniser and bindings of
+its own, under the "face" slot. It holds the cursor whenever no hand is
+pointing: a hand pointing in view takes it, and hands it back on leaving.
 """
 
 from dataclasses import dataclass, field
@@ -17,6 +17,7 @@ from .config import Config
 from .controller import MouseActuator
 from .face import FACE_SLOT, FaceFeatures
 from .face_gestures import FACE_POINTERS, FaceRecognizer
+from .filters import Deadband
 from .gestures import GestureRecognizer, Recognition
 from .hand import HAND_SLOTS, HandFeatures, other_hand
 
@@ -67,10 +68,12 @@ class GestureEngine:
                 f"(valid: hand, head, eyes), falling back to 'hand'."
             )
             cfg.pointer = "hand"
+        cfg.resolve_inputs()
         self.face: FaceRecognizer | None = None
-        if cfg.pointer in FACE_POINTERS:
+        if cfg.use_head or cfg.use_eyes:
             self.face = FaceRecognizer(cfg, active=set(self.bindings[FACE_SLOT]))
         self.enabled = True
+        self.pause_detail = ""
         self.dominant = cfg.dominant_hand if cfg.dominant_hand in HAND_SLOTS else "right"
         if cfg.dominant_hand not in HAND_SLOTS:
             print(
@@ -78,8 +81,29 @@ class GestureEngine:
                 f"(valid: left, right), falling back to 'right'."
             )
         self._cursor_hand: str | None = None
+        # in screen pixels, on every cursor movement, hand or face
+        self.deadband = Deadband(cfg.cursor_deadband)
 
     # ------------------------------------------------------------------
+    def set_inputs(self, hand: bool, head: bool, eyes: bool) -> None:
+        """Switch the hands, the head and the pupils on or off, live."""
+        if self.cfg.use_hand and not hand:
+            for slot, recognizer in self.recognizers.items():
+                for event in recognizer.reset():
+                    self._dispatch(slot, event)
+            self._cursor_hand = None
+        self.cfg.use_hand, self.cfg.use_head, self.cfg.use_eyes = hand, head, eyes
+        if head or eyes:
+            if self.face is None:
+                # A new face starts by calibrating, like at launch.
+                self.face = FaceRecognizer(self.cfg, active=set(self.bindings[FACE_SLOT]))
+            else:
+                self.face.set_mode(head, eyes)
+        elif self.face is not None:
+            for event in self.face.reset():
+                self._dispatch(FACE_SLOT, event)
+            self.face = None
+
     def swap_dominant(self) -> str:
         """Hand the pointer over to the other hand, from the next frame on."""
         self.dominant = other_hand(self.dominant)
@@ -88,8 +112,10 @@ class GestureEngine:
 
     @property
     def pointer_holder(self) -> str:
-        """Who the cursor belongs to, for the HUD: the face or a hand."""
-        return FACE_SLOT if self.face is not None else self.dominant
+        """Who the cursor belongs to, for the HUD: a hand pointing, else the face."""
+        if self._cursor_hand is not None or self.face is None:
+            return self._cursor_hand or self.dominant
+        return FACE_SLOT
 
     def recalibrate(self) -> bool:
         """Take the face's neutral pose again. False without a face pointer."""
@@ -98,9 +124,19 @@ class GestureEngine:
         self.face.recalibrate()
         return True
 
+    def tune_filter(self, min_cutoff: float, beta: float) -> None:
+        """New One Euro parameters, live: the face's when it is on, else the hands'."""
+        if self.face is not None:
+            filters = [self.face.cursor_filter]
+        else:
+            filters = [r.cursor_filter for r in self.recognizers.values()]
+        for f in filters:
+            f.tune(min_cutoff, beta)
+
     # ------------------------------------------------------------------
-    def set_enabled(self, value: bool) -> None:
+    def set_enabled(self, value: bool, detail: str = "Ctrl+Alt+P to resume") -> None:
         self.enabled = value
+        self.pause_detail = detail
         if not value:
             self.reset()
 
@@ -117,6 +153,7 @@ class GestureEngine:
                 action.reset(self.backend)
         self.mouse.release_all()
         self._cursor_hand = None
+        self.deadband.reset()
 
     # ------------------------------------------------------------------
     def update(
@@ -137,14 +174,14 @@ class GestureEngine:
                 EngineState(
                     hand=slot,
                     mode="PAUSED",
-                    detail="Ctrl+Alt+P to resume",
+                    detail=self.pause_detail,
                     pinches=feats[slot].pinches if feats.get(slot) else {},
                 )
                 for slot in HAND_SLOTS
             ]
             if self.face is not None:
                 states.append(
-                    EngineState(hand=FACE_SLOT, mode="PAUSED", detail="Ctrl+Alt+P to resume")
+                    EngineState(hand=FACE_SLOT, mode="PAUSED", detail=self.pause_detail)
                 )
             return states
 
@@ -183,7 +220,12 @@ class GestureEngine:
             result = self.face.update(face, t)
             labels = [
                 label
-                for label in (self._dispatch(FACE_SLOT, e) for e in result.events)
+                for label in (
+                    self._dispatch(FACE_SLOT, e)
+                    for e in result.events
+                    # a hand pointing has the cursor
+                    if not (e.kind == "cursor" and owner is not None)
+                )
                 if label
             ]
             states.append(
@@ -212,10 +254,8 @@ class GestureEngine:
         from the hand holding the mouse button down, or bringing the other hand
         into frame would fling whatever you are dragging across the screen.
 
-        With the face pointer on, no hand ever gets it.
+        None leaves the cursor to the face, if it is on.
         """
-        if self.face is not None:
-            return None
         candidates = [
             slot
             for slot in HAND_SLOTS
@@ -228,6 +268,8 @@ class GestureEngine:
             self._cursor_hand = None
         elif self.mouse.dragging and self._cursor_hand in candidates:
             pass
+        elif self.mouse.dragging and self._cursor_hand is None and self.face is not None:
+            pass  # a wink-drag: the face keeps the cursor until it lets go
         elif self.dominant in candidates:
             self._cursor_hand = self.dominant
         elif self._cursor_hand not in candidates:
@@ -240,7 +282,9 @@ class GestureEngine:
         if action is None:
             return None
         if event.kind == "cursor":
-            return action.cursor(self.backend, *event.value)
+            w, h = self.mouse.screen_w, self.mouse.screen_h
+            x, y = self.deadband(event.value[0] * w, event.value[1] * h)
+            return action.cursor(self.backend, x / w, y / h)
         if event.kind == "trigger":
             return action.trigger(self.backend)
         if event.kind == "hold":

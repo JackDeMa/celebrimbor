@@ -9,6 +9,8 @@ datas = [('models/hand_landmarker.task', 'models')]
 if os.path.exists('models/face_landmarker.task'):
     datas.append(('models/face_landmarker.task', 'models'))
 datas += collect_data_files('mediapipe')
+# The window's themes and fonts are JSON / font files PyInstaller cannot see.
+datas += collect_data_files('customtkinter')
 
 
 a = Analysis(

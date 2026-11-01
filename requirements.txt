@@ -2,3 +2,5 @@ opencv-python>=4.8
 mediapipe>=0.10.9,<0.11
 pynput>=1.7.6
 numpy
+customtkinter>=5.2,<6
+pillow

@@ -71,8 +71,9 @@ class Overlay:
     MARGIN = 24
     MAX_CHARS = 26  # what fits on one line at this width
 
-    def __init__(self, opacity: float = 0.82, face: bool = False):
-        self.root = tk.Tk()
+    def __init__(self, opacity: float = 0.82, face: bool = False, master=None):
+        # A child of the preview window when there is one: one Tk per process.
+        self.root = tk.Toplevel(master) if master is not None else tk.Tk()
         self.root.overrideredirect(True)  # no title bar, no border
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", opacity)
@@ -227,13 +228,13 @@ class Overlay:
             pass
 
 
-def create(opacity: float = 0.82, face: bool = False) -> Overlay | None:
+def create(opacity: float = 0.82, face: bool = False, master=None) -> Overlay | None:
     """Build the overlay, or return None with a reason if it cannot be had."""
     if sys.platform != "win32":
         print("Overlay: Windows only, carrying on without it.")
         return None
     try:
-        return Overlay(opacity=opacity, face=face)
+        return Overlay(opacity=opacity, face=face, master=master)
     except Exception as exc:  # a missing Tk, a headless session, a locked desktop
         print(f"Overlay unavailable ({exc}), carrying on without it.")
         return None

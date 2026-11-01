@@ -6,6 +6,7 @@ import time
 import cv2
 from pynput import keyboard
 
+from . import bindings as bindings_mod
 from . import face, hand, overlay
 from .config import Config
 from .controller import MouseActuator
@@ -20,8 +21,28 @@ from .detector import (
 )
 from .engine import FACE_SLOT, EngineState, GestureEngine
 
-WINDOW = "Celebrimbor"
-_HELP_W = 320  # width of the instructions column beside the camera image
+# The values Steady (1 / cutoff) and Speed (beta) step through: round numbers,
+# finer where a small change is felt, coarser where it is not.
+_STEADY_STEPS = (0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 15, 20)
+_SPEED_STEPS = (0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10, 15, 20)
+
+
+def _ladder_step(ladder: tuple, value: float, direction: int) -> float:
+    """The next round value above (+1) or below (-1) `value`; off the ladder,
+    the nearest one in that direction. Stays put at either end."""
+    if direction > 0:
+        return next((v for v in ladder if v > value + 1e-9), ladder[-1])
+    if direction < 0:
+        return next((v for v in reversed(ladder) if v < value - 1e-9), ladder[0])
+    return value
+
+
+# The Config fields of each pointer's filter: (cutoff, beta).
+_FILTER_KEYS = {
+    "hand": ("min_cutoff", "beta"),
+    "head": ("head_min_cutoff", "face_beta"),
+    "eyes": ("eyes_min_cutoff", "face_beta"),
+}
 
 _GREEN = (120, 230, 120)
 _GREY = (170, 170, 170)
@@ -65,8 +86,14 @@ def _mac_hotkeys(actions: dict) -> keyboard.Listener:
 
 
 class CelebrimborApp:
-    def __init__(self, cfg: Config, bindings: dict[str, dict] | None = None):
+    def __init__(
+        self,
+        cfg: Config,
+        bindings: dict[str, dict] | None = None,
+        config_path: str | None = None,
+    ):
         self.cfg = cfg
+        self.config_path = config_path
         self.mouse = MouseActuator(
             click_cooldown=cfg.click_cooldown, dry_run=cfg.dry_run
         )
@@ -74,6 +101,7 @@ class CelebrimborApp:
         self.running = True
         self.show_skeleton = True
         self.overlay: overlay.Overlay | None = None
+        self.window = None
         self._fps = 0.0
         self._events: list[tuple[float, str]] = []
         self._last_mode = ""
@@ -81,8 +109,17 @@ class CelebrimborApp:
         self._fists_since: float | None = None
         self._fists_done = False
         self._pause_progress = 0.0
+        # the real mouse moving: an automatic pause, lifted when it rests
+        self._mouse_paused = False
+        self._mouse_moved_at = 0.0
         self._frame_no = 0
         self._hands: list = []
+        # what Reset goes back to: every filter's values at launch
+        self._tuning_start = {
+            k: getattr(cfg, k)
+            for keys in (*_FILTER_KEYS.values(), ("cursor_deadband",))
+            for k in keys
+        }
 
     # --- global hotkeys ----------------------------------------------------
     def _make_hotkeys(self) -> keyboard.Listener:
@@ -101,7 +138,30 @@ class CelebrimborApp:
         self.running = False
 
     def toggle_pause(self) -> None:
+        if self._mouse_paused:
+            # Paused by the real mouse: pausing by hand makes it stick.
+            self._mouse_paused = False
+            self.engine.set_enabled(False)
+            return
         self.engine.set_enabled(not self.engine.enabled)
+
+    def _watch_mouse(self, now: float) -> None:
+        """The real mouse moving pauses; it resumes once the mouse rests."""
+        if self.cfg.mouse_pause_seconds <= 0:
+            return
+        if self.mouse.user_moved():
+            self._mouse_moved_at = now
+            if self.engine.enabled:
+                self._mouse_paused = True
+                self.engine.set_enabled(False, "mouse in use, resumes when still")
+                self._events.append((now, "PAUSED (mouse)"))
+        elif self._mouse_paused and now - self._mouse_moved_at >= self.cfg.mouse_pause_seconds:
+            self._mouse_paused = False
+            self.engine.set_enabled(True)
+            self._events.append((now, "RESUMED"))
+
+    def toggle_skeleton(self) -> None:
+        self.show_skeleton = not self.show_skeleton
 
     def swap_dominant(self) -> None:
         hand = self.engine.swap_dominant()
@@ -144,24 +204,117 @@ class CelebrimborApp:
         if self.overlay is not None:
             self.overlay.set_visible(not self.overlay.visible)
 
-    # --- main loop ----------------------------------------------------------
-    def run(self) -> int:
-        tracks_hands = self.cfg.num_hands > 0
-        if not tracks_hands and self.engine.face is None:
-            print("Nothing to track: --hands 0 needs --pointer head or --pointer eyes.")
-            return 2
+    # --- inputs and tuning (the window's switches and buttons) ----------------
+    def filter_keys(self) -> tuple[str, str]:
+        """The Config fields of the filter being tuned: (cutoff, beta).
 
-        detector = face_detector = None
-        # Loaded even with --hands 0: the two fists that pause are watched anyway.
+        The face's when it is on (it is the one that jitters), else the hand's.
+        """
+        pointer = self.engine.face.pointer if self.engine.face is not None else "hand"
+        return _FILTER_KEYS[pointer]
+
+    def toggle_input(self, part: str) -> None:
+        """Hand / Head / Eyes switch: that input on or off, at once."""
+        inputs = {"hand": self.cfg.use_hand, "head": self.cfg.use_head, "eyes": self.cfg.use_eyes}
+        inputs[part] = not inputs[part]
+        self.engine.set_inputs(**inputs)
+        state = "ON" if inputs[part] else "OFF"
+        self._events.append((time.monotonic(), f"{part.upper()} {state}"))
+        print(f"{part} {state}.", flush=True)
+
+    def steadiness(self) -> float:
+        """What Steady shows: 1 / cutoff, so it grows as the cursor calms down."""
+        return round(1.0 / getattr(self.cfg, self.filter_keys()[0]), 2)
+
+    def tune(self, steady: int = 0, speed: int = 0) -> None:
+        """One step up (+1) or down (-1) the Steady or Speed ladder, applied at once."""
+        _, bk = self.filter_keys()
+        cutoff = 1.0 / _ladder_step(_STEADY_STEPS, self.steadiness(), steady)
+        beta = _ladder_step(_SPEED_STEPS, getattr(self.cfg, bk), speed)
+        self._set_filter(cutoff, beta)
+
+    def set_filter(self, steady: float | None = None, speed: float | None = None) -> None:
+        """Steady and / or Speed typed in by hand: any value, not only the ladder's."""
+        ck, bk = self.filter_keys()
+        cutoff = getattr(self.cfg, ck) if steady is None else 1.0 / min(max(steady, 0.1), 100.0)
+        beta = getattr(self.cfg, bk) if speed is None else min(max(speed, 0.0), 100.0)
+        self._set_filter(cutoff, beta)
+
+    def _set_filter(self, cutoff: float, beta: float) -> None:
+        ck, bk = self.filter_keys()
+        # Enough digits for 1 / cutoff to come back as the round number it was.
+        setattr(self.cfg, ck, round(cutoff, 5))
+        setattr(self.cfg, bk, round(beta, 3))
+        self.engine.tune_filter(getattr(self.cfg, ck), getattr(self.cfg, bk))
+
+    def set_deadband(self, pixels: float) -> None:
+        self.cfg.cursor_deadband = min(max(pixels, 0.0), 300.0)
+        self.engine.deadband.radius = self.cfg.cursor_deadband
+
+    def reset_tuning(self) -> None:
+        ck, bk = self.filter_keys()
+        self._set_filter(self._tuning_start[ck], self._tuning_start[bk])
+        self.set_deadband(self._tuning_start["cursor_deadband"])
+
+    def save_tuning(self) -> None:
+        keys = (*self.filter_keys(), "cursor_deadband", "use_hand", "use_head", "use_eyes")
+        values = {k: getattr(self.cfg, k) for k in keys}
+        try:
+            path = bindings_mod.save_settings(self.config_path, values)
+        except (OSError, bindings_mod.ConfigError) as exc:
+            print(f"Settings not saved: {exc}", flush=True)
+            self._events.append((time.monotonic(), "SAVE FAILED"))
+            return
+        print(f"Saved to {path}: {values}", flush=True)
+        self._events.append((time.monotonic(), "SAVED"))
+
+    def gesture_sections(self) -> list[tuple[str, list[tuple[str, str]]]]:
+        """(title, [(gesture, action)]) for every input switched on.
+
+        Read off the bindings actually loaded, so the list never disagrees
+        with gestures.json.
+        """
+        sections = []
+        if self.engine.face is not None:
+            sections.append((self.engine.face.label, FACE_SLOT))
+        if self.cfg.use_hand:
+            sections.append(("index finger", self.engine.dominant))
+        out = []
+        for mover, slot in sections:
+            title = mover.capitalize() if slot == FACE_SLOT else f"{slot.capitalize()} hand"
+            pairs = [
+                (
+                    mover if name in ("point_move", "face_move") else name.replace("_", " "),
+                    action.label.lower(),
+                )
+                for name, action in self.engine.bindings[slot].items()
+            ]
+            out.append((title, pairs))
+        out.append(
+            ("Always", [("both fists closed", f"pause {self.cfg.pause_fists_seconds:g} s")])
+        )
+        return out
+
+    # --- main loop ----------------------------------------------------------
+    def _face_detector(self) -> FaceDetector:
+        """Built the first time the head or the eyes are switched on."""
+        model = ensure_model(
+            self.cfg.face_model_path or DEFAULT_FACE_MODEL_PATH, FACE_MODEL_URL, "FaceLandmarker"
+        )
+        return FaceDetector(
+            model,
+            min_detection_confidence=self.cfg.min_detection_confidence,
+            min_tracking_confidence=self.cfg.min_tracking_confidence,
+        )
+
+    def run(self) -> int:
+        face_detector = None
+        # Loaded with the hands off too: the two fists that pause are watched anyway.
         model_path = (
             ensure_model(self.cfg.model_path) if self.cfg.model_path else ensure_model()
         )
         if self.engine.face is not None:
-            face_model = ensure_model(
-                self.cfg.face_model_path or DEFAULT_FACE_MODEL_PATH,
-                FACE_MODEL_URL,
-                "FaceLandmarker",
-            )
+            face_detector = self._face_detector()
 
         cap = self._open_camera()
         if cap is None:
@@ -174,18 +327,15 @@ class CelebrimborApp:
             min_tracking_confidence=self.cfg.min_tracking_confidence,
             mirrored=self.cfg.mirror,
         )
-        if self.engine.face is not None:
-            face_detector = FaceDetector(
-                face_model,
-                min_detection_confidence=self.cfg.min_detection_confidence,
-                min_tracking_confidence=self.cfg.min_tracking_confidence,
-            )
         if self.cfg.show_preview:
-            # Created up front: the loop checks the window before showing a
-            # frame, and there has to be one to check.
-            cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
+            from .window import ControlWindow  # Tk only when there is a window
+
+            self.window = ControlWindow(self)
         if self.cfg.overlay:
-            self.overlay = overlay.create(face=self.engine.face is not None)
+            # With the face row always: the head can be switched on at any time.
+            # A child of the window when there is one: one Tk per process.
+            master = self.window.root if self.window is not None else None
+            self.overlay = overlay.create(face=True, master=master)
         hotkeys = self._make_hotkeys()
         hotkeys.start()
         print(
@@ -193,13 +343,14 @@ class CelebrimborApp:
             f"closed for {self.cfg.pause_fists_seconds:.0f} s) to pause, "
             "Ctrl+Alt+Space to move the pointer to the other hand."
         )
+        on = [n for n, v in (("hand", self.cfg.use_hand), ("head", self.cfg.use_head),
+                             ("eyes", self.cfg.use_eyes)) if v]
+        print(f"Driving the mouse: {', '.join(on) or 'nothing (switch something on)'}.")
         if self.engine.face is not None:
             print(
-                f"Pointer on the {self.engine.face.pointer}. Look at the centre of the "
-                "screen while it calibrates; Ctrl+Alt+C to calibrate again."
+                "Look at the centre of the screen while it calibrates; "
+                "Ctrl+Alt+C to calibrate again."
             )
-        else:
-            print(f"Pointer on the {self.engine.dominant} hand.")
         if self.cfg.dry_run:
             print("DRY-RUN: gestures are recognised but the mouse does not move.")
 
@@ -216,15 +367,18 @@ class CelebrimborApp:
 
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 now = time.monotonic()
-                # With --hands 0 the hands are only watched for the pause fists:
+                # With the hands off they are only watched for the pause fists:
                 # one frame in three is plenty for a 3-second hold.
+                tracks_hands = self.cfg.use_hand
                 self._frame_no += 1
                 if tracks_hands or self._frame_no % 3 == 0:
                     self._hands = detector.detect(rgb, int(now * 1000))
                 hands = self._hands
-                face_landmarks = (
-                    face_detector.detect(rgb, int(now * 1000)) if face_detector else None
-                )
+                face_landmarks = None
+                if self.engine.face is not None:
+                    if face_detector is None:
+                        face_detector = self._face_detector()
+                    face_landmarks = face_detector.detect(rgb, int(now * 1000))
 
                 dt = now - last_t
                 last_t = now
@@ -237,6 +391,7 @@ class CelebrimborApp:
                 # fist_hold on the way there.
                 if self._fists_pause(feats, now) or not tracks_hands:
                     feats = {}
+                self._watch_mouse(now)
                 face_feats = None
                 if face_landmarks is not None:
                     fh, fw = frame.shape[:2]
@@ -252,18 +407,12 @@ class CelebrimborApp:
                         self.engine.enabled,
                     )
 
-                if not self.cfg.show_preview:
+                if self.window is None:
                     self._log(states)
                 else:
-                    # Before drawing, not after: the overlay's Tk pump drains the
-                    # whole thread message queue, close button included, so the
-                    # window can already be gone by the time we get here - and
-                    # imshow would silently build a new one, swallowing the X.
-                    if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
-                        break
                     self._draw(frame, hands, face_landmarks, states)
-                    cv2.imshow(WINDOW, self._with_help(frame))
-                    if not self._handle_keys():
+                    self.window.show(frame, states, [e for _, e in self._events], self._fps)
+                    if not self.window.alive:
                         break
         except KeyboardInterrupt:
             pass
@@ -274,9 +423,10 @@ class CelebrimborApp:
             if face_detector is not None:
                 face_detector.close()
             cap.release()
-            cv2.destroyAllWindows()
             if self.overlay is not None:
                 self.overlay.close()
+            if self.window is not None:
+                self.window.close()
         return 0
 
     # --- webcam -------------------------------------------------------------
@@ -296,22 +446,6 @@ class CelebrimborApp:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
-    def _handle_keys(self) -> bool:
-        key = cv2.waitKey(1) & 0xFF
-        if key in (27, ord("q")):
-            return False
-        if key == ord("p"):
-            self.toggle_pause()
-        elif key == ord("h"):
-            self.show_skeleton = not self.show_skeleton
-        elif key == ord("d"):
-            self.swap_dominant()
-        elif key == ord("o"):
-            self.toggle_overlay()
-        elif key == ord("c"):
-            self.recalibrate()
-        return True
-
     # --- console (when the preview is disabled) -----------------------------
     def _log(self, states: list[EngineState]) -> None:
         modes = "  ".join(f"{s.hand[0].upper()}:{s.mode}" for s in states)
@@ -323,7 +457,7 @@ class CelebrimborApp:
             for ev in state.events:
                 print(f"  -> [{state.hand[0].upper()}] {ev}", flush=True)
 
-    # --- HUD -----------------------------------------------------------------
+    # --- drawing on the camera image ------------------------------------------
     def _record(self, states: list[EngineState], now: float) -> None:
         for state in states:
             for ev in state.events:
@@ -331,9 +465,13 @@ class CelebrimborApp:
         self._events = [(t, e) for t, e in self._events if now - t < 1.2]
 
     def _draw(self, frame, hands, face_landmarks, states: list[EngineState]) -> None:
+        """What belongs on the picture itself: skeletons, aim points, bars.
+
+        Modes, events and fps live in the window around it.
+        """
         h, w = frame.shape[:2]
-        # With --hands 0 there are no hands to report on, only the face.
-        hand_states = [s for s in states if s.hand != FACE_SLOT and self.cfg.num_hands > 0]
+        # With the hands off there are no hands to report on, only the face.
+        hand_states = [s for s in states if s.hand != FACE_SLOT and self.cfg.use_hand]
         face_state = next((s for s in states if s.hand == FACE_SLOT), None)
 
         if self.show_skeleton:
@@ -343,8 +481,8 @@ class CelebrimborApp:
                 self._draw_face(frame, face_landmarks, w, h)
 
         c = self.cfg
-        if face_state is None:
-            # The active area only means something while a hand holds the pointer.
+        if c.use_hand:
+            # The active area only means something while a hand can point.
             cv2.rectangle(
                 frame,
                 (int(c.active_x_min * w), int(c.active_y_min * h)),
@@ -363,7 +501,6 @@ class CelebrimborApp:
             cv2.circle(frame, rp, 11, _RED if anchored else _GREEN, 2)
             cv2.circle(frame, rp, 2, _RED if anchored else _GREEN, -1)
 
-        self._draw_header(frame, w, hand_states)
         if face_state is not None:
             self._draw_face_readouts(frame, face_state, w, h)
 
@@ -373,112 +510,9 @@ class CelebrimborApp:
             x = 10 if state.hand == "left" else w // 2
             self._draw_readouts(frame, state, x, h)
 
-        for i, (_, ev) in enumerate(reversed(self._events[-3:])):
-            cv2.putText(
-                frame, ev, (w - 200, 90 + i * 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, _YELLOW, 2
-            )
-
         if self._pause_progress > 0.0:
             label = "RESUME" if not self.engine.enabled else "PAUSE"
             self._progress(frame, label, self._pause_progress, w // 2 - 120, h // 2 + 40)
-        if not self.engine.enabled:
-            cv2.putText(
-                frame, "PAUSED", (w // 2 - 70, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.2, _RED, 3
-            )
-
-        if self.cfg.dry_run:
-            cv2.putText(
-                frame, "DRY-RUN", (w - 180, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _YELLOW, 2
-            )
-        cv2.putText(
-            frame,
-            f"{self._fps:4.1f} fps",
-            (w - 85, h - 12),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            _GREY,
-            1,
-        )
-
-    def _with_help(self, frame):
-        """The frame with a column of basic instructions on its right.
-
-        The gestures are read off the bindings actually loaded, so the column
-        never disagrees with gestures.json.
-        """
-        fh, fw = frame.shape[:2]
-        out = cv2.copyMakeBorder(
-            frame, 0, 0, 0, _HELP_W, cv2.BORDER_CONSTANT, value=(25, 25, 25)
-        )
-        holder = self.engine.pointer_holder
-        face_mode = self.engine.face is not None
-        mover = self.engine.face.pointer if face_mode else "index finger"
-        rows: list[tuple[str, str]] = [
-            (f"GESTURES ({mover.upper() if face_mode else holder.upper() + ' HAND'})", "")
-        ]
-        for name, action in self.engine.bindings[holder].items():
-            gesture = mover if name in ("point_move", "face_move") else name.replace("_", " ")
-            rows.append((gesture, action.label.upper()))
-        rows += [
-            ("", ""),
-            ("both fists closed", f"PAUSE {self.cfg.pause_fists_seconds:.0f}s"),
-            ("", ""),
-            ("KEYS (THIS WINDOW)", ""),
-            ("q / Esc", "quit"),
-            ("p", "pause / resume"),
-            ("h / o", "skeleton / overlay"),
-            ("c" if face_mode else "d", "calibrate" if face_mode else "swap hand"),
-            ("", ""),
-            ("GLOBAL", ""),
-            ("Ctrl+Alt+Q / P", "quit / pause"),
-            (
-                "Ctrl+Alt+C" if face_mode else "Ctrl+Alt+Space",
-                "calibrate" if face_mode else "swap hand",
-            ),
-        ]
-
-        x = fw + 12
-        for i, (left, right) in enumerate(rows):
-            y = 22 + i * 15
-            if y > fh - 8:
-                break
-            header = not right and left.isupper()
-            cv2.putText(
-                out, left, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
-                _YELLOW if header else _GREY, 1,
-            )
-            if right:
-                cv2.putText(
-                    out, right[:18], (x + 165, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, _WHITE, 1
-                )
-        return out
-
-    def _draw_header(self, frame, w: int, states: list[EngineState]) -> None:
-        """Two rows: the mode of each hand, and underneath its detail."""
-        color = _GREEN if self.engine.enabled else _RED
-        cv2.rectangle(frame, (0, 0), (w, 56), (25, 25, 25), -1)
-        for state in states:
-            x = 10 if state.hand == "left" else w // 2
-            # The dot marks the hand holding the pointer when both are in view.
-            initial = state.hand[0].upper()
-            marker = "*" if state.hand == self.engine.pointer_holder else " "
-            faded = state.mode == "NO HAND"
-            cv2.putText(
-                frame,
-                f"{initial}{marker} {state.mode}",
-                (x, 24),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                _GREY if faded else color,
-                2,
-            )
-            detail = state.detail
-            if state.cursor_source:
-                detail = f"[{state.cursor_source}] {detail}".rstrip()
-            if detail:
-                cv2.putText(
-                    frame, detail, (x, 47), cv2.FONT_HERSHEY_SIMPLEX, 0.42, _GREY, 1
-                )
 
     def _draw_readouts(self, frame, state: EngineState, x: int, h: int) -> None:
         """Pinch bars and still-fist progress of one hand, in its own column."""
@@ -510,22 +544,7 @@ class CelebrimborApp:
             cv2.circle(frame, p, 6 if highlight else 3, _YELLOW if highlight else _GREEN, -1)
 
     def _draw_face_readouts(self, frame, state: EngineState, w: int, h: int) -> None:
-        """A strip under the header: what the face is doing, how open each eye is."""
-        color = _GREEN if self.engine.enabled else _RED
-        cv2.rectangle(frame, (0, 56), (w, 80), (40, 40, 40), -1)
-        text = f"F* {state.mode}"
-        if state.detail:
-            text = f"{text}  {state.detail}"
-        cv2.putText(
-            frame,
-            text,
-            (10, 74),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            _GREY if state.mode == "NO FACE" else color,
-            1,
-        )
-
+        """Where the nose points, the calibration, how open each eye is."""
         if state.ref_point is not None:
             rp = (int(state.ref_point[0] * w), int(state.ref_point[1] * h))
             cv2.circle(frame, rp, 9, _GREEN, 2)
@@ -536,7 +555,7 @@ class CelebrimborApp:
         # Openness of each eye, 1 = habitual: the tick is where it counts as shut.
         for i, side in enumerate(face.EYE_SIDES):
             if side in state.eyes:
-                self._eye_bar(frame, f"{side[0].upper()}EYE", state.eyes[side], 10, 90 + i * 20)
+                self._eye_bar(frame, f"{side[0].upper()}EYE", state.eyes[side], 10, 12 + i * 20)
 
     def _eye_bar(self, frame, label: str, value: float, x: int, y: int) -> None:
         ratio = min(max(value, 0.0), 1.0)

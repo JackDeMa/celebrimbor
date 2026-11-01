@@ -138,6 +138,13 @@ def apply_cli(cfg: Config, a: argparse.Namespace) -> None:
     if a.sensitivity is not None:
         _scale_active_area(cfg, a.sensitivity)
         _scale_face_ranges(cfg, a.sensitivity)
+    # Spelled out on the command line: it beats the switches saved in the JSON.
+    if a.pointer is not None:
+        cfg.use_head = a.pointer in ("head", "eyes")
+        cfg.use_eyes = a.pointer == "eyes"
+    if a.hands is not None:
+        cfg.use_hand = a.hands > 0
+    cfg.resolve_inputs()
 
 
 def print_reference() -> None:
@@ -183,7 +190,7 @@ def main() -> int:
     if not any(binds.values()):
         print("No gesture bound: check the \"bindings\" section.")
 
-    return CelebrimborApp(cfg, binds).run()
+    return CelebrimborApp(cfg, binds, config_path=a.config).run()
 
 
 if __name__ == "__main__":

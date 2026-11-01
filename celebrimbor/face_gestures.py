@@ -120,11 +120,11 @@ class _Switch:
 class FaceRecognizer:
     def __init__(self, cfg: Config, active: set[str] | None = None):
         self.cfg = cfg
-        self.pointer = cfg.pointer if cfg.pointer in FACE_POINTERS else "head"
+        cfg.resolve_inputs()
         active = set(FACE_GESTURE_KINDS) if active is None else active
         self.moves = "face_move" in active
-        cutoff = cfg.eyes_min_cutoff if self.pointer == "eyes" else cfg.head_min_cutoff
-        self.cursor_filter = PointFilter(cutoff, cfg.face_beta, cfg.d_cutoff)
+        self.cursor_filter = PointFilter(cfg.head_min_cutoff, cfg.face_beta, cfg.d_cutoff)
+        self.set_mode(cfg.use_head, cfg.use_eyes)
 
         self._eye = {
             side: ClosingDetector(cfg.eye_window, cfg.eye_closed_ratio, cfg.eye_open_ratio)
@@ -163,6 +163,17 @@ class FaceRecognizer:
         self._missing = 0
 
     # ------------------------------------------------------------------
+    def set_mode(self, head: bool, eyes: bool) -> None:
+        """What steers, live: the pupils (plus the head's turn if `head`), or the head."""
+        self.pointer = "eyes" if eyes else "head"
+        self.use_head = bool(head)
+        cutoff = self.cfg.eyes_min_cutoff if eyes else self.cfg.head_min_cutoff
+        self.cursor_filter.tune(cutoff, self.cfg.face_beta)
+
+    @property
+    def label(self) -> str:
+        return "eyes+head" if self.pointer == "eyes" and self.use_head else self.pointer
+
     def recalibrate(self) -> None:
         """Measure the neutral pose again, from the next frame with a face."""
         self.neutral = None
@@ -232,7 +243,7 @@ class FaceRecognizer:
         )
         # Eyes pointer with an eye shut, for a click or a drag: the lid drags
         # its pupil and the open eye's tends to follow, so only the nose steers.
-        nose_only = self.pointer == "eyes" and (
+        nose_only = self.pointer == "eyes" and self.use_head and (
             any(closed.values()) or any(w.down_at is not None for w in self._winks.values())
         )
         if not nose_only:
@@ -398,8 +409,9 @@ class FaceRecognizer:
             if not sides:
                 return None
             gx, gy = self._mean_gaze(feats, sides)
-            u = (gx - gx0) / max(c.eyes_range_x, 1e-6) + c.eyes_head_gain * hx
-            v = (gy - gy0) / max(c.eyes_range_y, 1e-6) + c.eyes_head_gain * hy
+            head_gain = c.eyes_head_gain if self.use_head else 0.0
+            u = (gx - gx0) / max(c.eyes_range_x, 1e-6) + head_gain * hx
+            v = (gy - gy0) / max(c.eyes_range_y, 1e-6) + head_gain * hy
 
         return (
             min(max(0.5 + 0.5 * u, 0.0), 1.0),
@@ -468,7 +480,7 @@ class FaceRecognizer:
                 return f"WINK {side[0].upper()}"
         if self._mouth.pending:
             return "MOUTH OPEN"
-        return self.pointer.upper()
+        return self.label.upper()
 
     def _detail(self) -> str:
         for side, wink in self._winks.items():
