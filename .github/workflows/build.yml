@@ -19,7 +19,7 @@ jobs:
         include:
           - os: windows-latest
             platform: win-x64
-          - os: macos-14
+          - os: macos-15
             platform: macos-arm64
     runs-on: ${{ matrix.os }}
     defaults:
