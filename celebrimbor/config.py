@@ -139,21 +139,50 @@ class Config:
     # from the centre to the edge of the screen: about 0.15 is 17 degrees.
     head_range_x: float = 0.15
     head_range_y: float = 0.10
-    # Pupil travel, in eye widths, that does the same. The eye covers a screen
-    # with a tiny movement and a webcam sees it at a few pixels: expect to aim
-    # at buttons, not at characters.
-    eyes_range_x: float = 0.14
-    eyes_range_y: float = 0.08
-    # In eyes mode the head turning counts too, weighted by this: you rarely
-    # look at a corner without turning a little towards it. 0 = pupils only.
-    eyes_head_gain: float = 0.7
-    # One Euro cutoff of the face cursor, per pointer: the pupils jitter far
-    # more than the head and need much heavier smoothing. The cutoff is low so
-    # a face held still sits still; `face_beta` raises it with the speed, in
-    # screens per second, so a deliberate turn is not slowed down.
+    # Pupil travel, in eye distances (not eye widths any more: about 0.45 of
+    # the old values), that does the same. The eye covers a screen with a tiny
+    # movement and a webcam sees it at a few pixels: on their own the pupils
+    # aim at buttons, not at characters.
+    eyes_range_x: float = 0.06
+    eyes_range_y: float = 0.035
+    # One Euro filter of the head's cursor. The cutoff is low so a face held
+    # still sits still; `face_beta` raises it with the speed, in screens per
+    # second, so a deliberate turn is not slowed down.
     head_min_cutoff: float = 0.4
-    eyes_min_cutoff: float = 0.2
     face_beta: float = 4.0
+    # HEAD and EYES together: the head places the cursor exactly as in head
+    # mode and the pupils only nudge it from there, by at most this fraction
+    # of the screen each way. Their jitter is confined to that patch.
+    eyes_fine_x: float = 0.06
+    eyes_fine_y: float = 0.08
+    # 1 = the nudge goes all the way to where you look. Below 1 it falls
+    # short, which pulls the cursor back towards the nose.
+    eyes_fine_gain: float = 1.0
+    # One Euro filter of the pupils (Steady / Speed with the eyes on), also on
+    # their own. Beta is 0: their speed is mostly noise, and a beta would open
+    # the filter on it.
+    eyes_fine_cutoff: float = 0.5
+    eyes_fine_beta: float = 0.0
+    # Pupil movement ignored after the filter, as a fraction of the screen.
+    eyes_fine_deadband: float = 0.02
+    # Turning the head shifts the iris between the eye's corners on its own:
+    # this much of the nose's travel is taken out of the pupils'. A guess to
+    # tune per webcam: raise it if turning the head overshoots what head mode
+    # does, lower it if it falls short.
+    eyes_head_comp_x: float = 0.5
+    eyes_head_comp_y: float = 0.4
+    # The pupils' centre follows their average over about this long, so a
+    # change of posture does not leave the nudge stuck to one side. 0 = never.
+    eyes_recentre_seconds: float = 30.0
+    # The pupils are not read on frames where an eye is less open than this
+    # (1 = habitual; the lid drags the iris landmarks long before the eye is
+    # shut), or where the two eyes disagree by more than this fraction of
+    # `eyes_range` (a reflection on glasses).
+    eyes_min_open: float = 0.8
+    eyes_max_disagree: float = 0.6
+    # Obsolete, ignored: kept so old settings and --smoothing still load.
+    eyes_head_gain: float = 0.7
+    eyes_min_cutoff: float = 0.2
     # Eye closure, relative to how open the eye habitually is (the maximum over
     # `eye_window` seconds): as with the pinch anchoring, a fixed threshold
     # would never fit both narrow and wide eyes.
@@ -178,8 +207,8 @@ class Config:
 
     # --- what drives the mouse ---
     # Each on or off on its own, with the HAND / HEAD / EYES buttons in the
-    # preview too (SAVE writes them here). HEAD and EYES together: the pupils
-    # plus the head's turn. A hand pointing in view takes the cursor from the
+    # preview too (SAVE writes them here). HEAD and EYES together: the head
+    # aims, the pupils refine. A hand pointing in view takes the cursor from the
     # face; out of view, the face has it back. None = from "pointer" and
     # --hands 0, the older way of choosing.
     use_hand: bool | None = None

@@ -8,6 +8,10 @@ The face drives the cursor in one of two ways:
           head-free, but a webcam sees the pupil at a few pixels, so it aims at
           buttons rather than at characters.
 
+With both on the head does the aiming, exactly as in head mode, and the pupils
+only nudge the cursor a little way from there: their jitter stays inside a
+small patch of screen instead of being spread over all of it.
+
 Both are absolute and measured from a neutral pose taken at startup, with the
 user looking at the centre of the screen. Clicks come from the eyelids: a wink
 of one eye is a click, held a little longer it becomes a drag. Blinking with
@@ -22,7 +26,7 @@ from dataclasses import dataclass, field
 
 from .config import Config
 from .face import EYE_SIDES, FaceFeatures, other_eye
-from .filters import PointFilter
+from .filters import Deadband, PointFilter
 from .gestures import ClosingDetector, GestureEvent
 
 FACE_POINTERS = ("head", "eyes")
@@ -123,7 +127,16 @@ class FaceRecognizer:
         cfg.resolve_inputs()
         active = set(FACE_GESTURE_KINDS) if active is None else active
         self.moves = "face_move" in active
+        # The head's cursor, and the pupils' share of it (see `_fine_update`).
         self.cursor_filter = PointFilter(cfg.head_min_cutoff, cfg.face_beta, cfg.d_cutoff)
+        self.fine_filter = PointFilter(cfg.eyes_fine_cutoff, cfg.eyes_fine_beta, cfg.d_cutoff)
+        self._fine_band = Deadband(cfg.eyes_fine_deadband)
+        self._fine = (0.0, 0.0)                      # in screens, from the head's point
+        self._fine_history: deque[tuple[float, float, float]] = deque()
+        self._fine_t: float | None = None            # last frame the pupils were read
+        self._fine_held = False                      # rewound for the wink under way
+        self._gaze0 = (0.0, 0.0)                     # the pupils' centre, slowly following
+        self.neutral: tuple[tuple[float, float], tuple[float, float]] | None = None
         self.set_mode(cfg.use_head, cfg.use_eyes)
 
         self._eye = {
@@ -152,11 +165,8 @@ class FaceRecognizer:
         self._history: deque[tuple[float, float, float]] = deque()  # (t, x, y)
         self._frozen: tuple[float, float] | None = None
         self._settle_until = 0.0
-        # (cursor, nose) when an eye shut in eyes mode: the nose steers from there
-        self._nose_anchor: tuple[tuple[float, float], tuple[float, float]] | None = None
 
         # calibration
-        self.neutral: tuple[tuple[float, float], tuple[float, float]] | None = None
         self._calib_from: float | None = None
         self._calib_samples: list[tuple[tuple[float, float], tuple[float, float]]] = []
 
@@ -164,15 +174,27 @@ class FaceRecognizer:
 
     # ------------------------------------------------------------------
     def set_mode(self, head: bool, eyes: bool) -> None:
-        """What steers, live: the pupils (plus the head's turn if `head`), or the head."""
-        self.pointer = "eyes" if eyes else "head"
-        self.use_head = bool(head)
-        cutoff = self.cfg.eyes_min_cutoff if eyes else self.cfg.head_min_cutoff
-        self.cursor_filter.tune(cutoff, self.cfg.face_beta)
+        """What steers, live: the head, the pupils, or the head with the pupils refining."""
+        mode = ("eyes" if eyes else "head", bool(head))
+        if mode == (getattr(self, "pointer", None), getattr(self, "use_head", None)):
+            return
+        self.pointer, self.use_head = mode
+        # The pupils mean something else with and without the head under them.
+        self._fine_reset()
+        if self.neutral is not None:
+            self._gaze0 = self.neutral[1]
+
+    @property
+    def hybrid(self) -> bool:
+        return self.pointer == "eyes" and self.use_head
 
     @property
     def label(self) -> str:
-        return "eyes+head" if self.pointer == "eyes" and self.use_head else self.pointer
+        return "eyes+head" if self.hybrid else self.pointer
+
+    def tune(self, min_cutoff: float, beta: float) -> None:
+        """Steady / Speed, live: the pupils' filter with the eyes on, else the head's."""
+        (self.fine_filter if self.pointer == "eyes" else self.cursor_filter).tune(min_cutoff, beta)
 
     def recalibrate(self) -> None:
         """Measure the neutral pose again, from the next frame with a face."""
@@ -180,6 +202,7 @@ class FaceRecognizer:
         self._calib_from = None
         self._calib_samples = []
         self.cursor_filter.reset()
+        self._fine_reset()
         self._history.clear()
 
     def reset(self) -> list[GestureEvent]:
@@ -188,11 +211,19 @@ class FaceRecognizer:
         for detector in self._eye.values():
             detector.reset()
         self.cursor_filter.reset()
+        self._fine_reset()
         self._history.clear()
         self._frozen = None
-        self._nose_anchor = None
         self._settle_until = 0.0
         return events
+
+    def _fine_reset(self) -> None:
+        self.fine_filter.reset()
+        self._fine_band.reset()
+        self._fine = (0.0, 0.0)
+        self._fine_history.clear()
+        self._fine_t = None
+        self._fine_held = False
 
     def _release(self) -> list[GestureEvent]:
         events = []
@@ -241,23 +272,27 @@ class FaceRecognizer:
             or any(s.pending for s in self._winks.values() if s.bound)
             or (self._mouth.pending and self._mouth.bound)
         )
-        # Eyes pointer with an eye shut, for a click or a drag: the lid drags
-        # its pupil and the open eye's tends to follow, so only the nose steers.
-        nose_only = self.pointer == "eyes" and self.use_head and (
+        # Head and eyes with an eye shut, for a click or a drag: the lid drags
+        # its pupil and the open eye's tends to follow. The head goes on
+        # steering; the pupils' share stays as it was before the lid dropped.
+        winking = self.hybrid and (
             any(closed.values()) or any(w.down_at is not None for w in self._winks.values())
         )
-        if not nose_only:
-            self._nose_anchor = None
+        if not winking:
+            self._fine_held = False
         if self.scrolling and not holding:
             # Frozen like for a wink, while the head (or the eyes) scroll.
             if self._frozen is None:
-                self._frozen = self._rewound(t)
+                self._frozen = self._rewound(self._history, t)
             self._settle_until = t + self.cfg.face_settle
             point = self._frozen
-            events += self._scroll(feats, closed, t)
-        elif nose_only:
+            events += self._scroll(feats, closed, openness, t)
+        elif winking:
             self._scroll_last = None
-            point = self._nose_steer(feats, t)
+            if not self._fine_held:
+                self._fine_held = True
+                self._fine = self._rewound(self._fine_history, t) or self._fine
+            point = self._aim(feats, closed, openness, t, read_eyes=False)
             # Held there for `face_settle` once the eye reopens.
             self._frozen = point
             self._settle_until = t + self.cfg.face_settle
@@ -266,7 +301,7 @@ class FaceRecognizer:
             # Back to where the cursor was before the eyelid started dropping,
             # and kept there until it is open again.
             if self._frozen is None:
-                self._frozen = self._rewound(t)
+                self._frozen = self._rewound(self._history, t)
             self._settle_until = t + self.cfg.face_settle
             point = self._frozen
         elif t < self._settle_until:
@@ -275,13 +310,10 @@ class FaceRecognizer:
         else:
             self._scroll_last = None
             self._frozen = None
-            target = self._target(feats, closed)
-            point = None
-            if target is not None:
-                point = self.cursor_filter(target[0], target[1], t)
-                self._history.append((t, *point))
-                while self._history and t - self._history[0][0] > self.cfg.face_rewind * 2:
-                    self._history.popleft()
+            point = self._aim(feats, closed, openness, t)
+            self._history.append((t, *point))
+            while self._history and t - self._history[0][0] > self.cfg.face_rewind * 2:
+                self._history.popleft()
 
         if point is not None and self.moves:
             events.append(GestureEvent("face_move", "cursor", point))
@@ -318,6 +350,7 @@ class FaceRecognizer:
                     sum(g[1] for _, g in self._calib_samples) / n,
                 ),
             )
+            self._gaze0 = self.neutral[1]
             self._calib_samples = []
         return FaceRecognition(
             mode="CALIBRATING",
@@ -391,43 +424,100 @@ class FaceRecognizer:
         gy = sum(feats.gaze[s][1] for s in sides) / len(sides)
         return gx, gy
 
-    def _target(
-        self, feats: FaceFeatures, closed: dict[str, bool]
-    ) -> tuple[float, float] | None:
-        """Where on the screen (0..1) the face is pointing right now."""
+    def _aim(
+        self,
+        feats: FaceFeatures,
+        closed: dict[str, bool],
+        openness: dict[str, float],
+        t: float,
+        read_eyes: bool = True,
+    ) -> tuple[float, float]:
+        """Where on the screen (0..1) the face is pointing right now, filtered.
+
+        The head places the cursor, the pupils move it from there: by a small
+        patch with the head on, by the whole screen on their own.
+        """
         c = self.cfg
-        (hx0, hy0), (gx0, gy0) = self.neutral
-        hx = (feats.head[0] - hx0) / max(c.head_range_x, 1e-6)
-        hy = (feats.head[1] - hy0) / max(c.head_range_y, 1e-6)
+        x = y = 0.5
+        if self.pointer == "head" or self.use_head:
+            (hx0, hy0), _ = self.neutral
+            u = (feats.head[0] - hx0) / max(c.head_range_x, 1e-6)
+            v = (feats.head[1] - hy0) / max(c.head_range_y, 1e-6)
+            x, y = self.cursor_filter(
+                min(max(0.5 + 0.5 * u, 0.0), 1.0), min(max(0.5 + 0.5 * v, 0.0), 1.0), t
+            )
+        if self.pointer == "eyes":
+            if read_eyes:
+                self._fine_update(feats, closed, openness, t)
+            x = min(max(x + self._fine[0], 0.0), 1.0)
+            y = min(max(y + self._fine[1], 0.0), 1.0)
+        return x, y
 
-        if self.pointer == "head":
-            u, v = hx, hy
-        else:
-            # Only the eyes actually open: a shut one has its pupil dragged
-            # around by the lid. During a wink-drag that leaves one.
-            sides = [s for s in EYE_SIDES if s in feats.gaze and not closed[s]]
-            if not sides:
+    def _gaze(
+        self, feats: FaceFeatures, closed: dict[str, bool], openness: dict[str, float]
+    ) -> tuple[float, float] | None:
+        """The pupils, on a frame where they can be trusted; else None."""
+        c = self.cfg
+        # With the head on both eyes are wanted: one alone reads off to a side.
+        # On their own a wink-drag has to steer with the one left open.
+        sides = [s for s in EYE_SIDES if s in feats.gaze and not closed[s]]
+        if not sides or (self.use_head and len(sides) < len(EYE_SIDES)):
+            return None
+        if any(openness[s] < c.eyes_min_open for s in sides):
+            return None
+        if len(sides) == len(EYE_SIDES):
+            (ax, ay), (bx, by) = (feats.gaze[s] for s in sides)
+            limit = c.eyes_max_disagree
+            if abs(ax - bx) > limit * c.eyes_range_x or abs(ay - by) > limit * c.eyes_range_y:
                 return None
-            gx, gy = self._mean_gaze(feats, sides)
-            head_gain = c.eyes_head_gain if self.use_head else 0.0
-            u = (gx - gx0) / max(c.eyes_range_x, 1e-6) + head_gain * hx
-            v = (gy - gy0) / max(c.eyes_range_y, 1e-6) + head_gain * hy
+        return self._mean_gaze(feats, sides)
 
-        return (
-            min(max(0.5 + 0.5 * u, 0.0), 1.0),
-            min(max(0.5 + 0.5 * v, 0.0), 1.0),
-        )
+    def _fine_update(
+        self,
+        feats: FaceFeatures,
+        closed: dict[str, bool],
+        openness: dict[str, float],
+        t: float,
+    ) -> None:
+        """Move the pupils' share of the cursor; it stays put on a bad frame."""
+        c = self.cfg
+        gaze = self._gaze(feats, closed, openness)
+        if gaze is None:
+            self._fine_t = None
+            return
+        (hx0, hy0), _ = self.neutral
+        if self.use_head:
+            comp, gain = (c.eyes_head_comp_x, c.eyes_head_comp_y), c.eyes_fine_gain
+            limit = (c.eyes_fine_x, c.eyes_fine_y)
+        else:
+            comp, gain, limit = (0.0, 0.0), 1.0, (0.5, 0.5)
+        ex = gaze[0] - self._gaze0[0] - comp[0] * (feats.head[0] - hx0)
+        ey = gaze[1] - self._gaze0[1] - comp[1] * (feats.head[1] - hy0)
+        # The centre follows slowly, only under the head: on their own the
+        # pupils are absolute, and staring at a corner must not bring it back.
+        if self.use_head and c.eyes_recentre_seconds > 0.0 and self._fine_t is not None:
+            k = min(max(t - self._fine_t, 0.0) / c.eyes_recentre_seconds, 1.0)
+            self._gaze0 = (self._gaze0[0] + k * ex, self._gaze0[1] + k * ey)
+        self._fine_t = t
+        # Clamped before the filter, so it never has to unwind from out there.
+        u = min(max(gain * 0.5 * ex / max(c.eyes_range_x, 1e-6), -limit[0]), limit[0])
+        v = min(max(gain * 0.5 * ey / max(c.eyes_range_y, 1e-6), -limit[1]), limit[1])
+        self._fine = self._fine_band(*self.fine_filter(u, v, t))
+        self._fine_history.append((t, *self._fine))
+        while self._fine_history and t - self._fine_history[0][0] > c.face_rewind * 2:
+            self._fine_history.popleft()
 
     def _scroll(
-        self, feats: FaceFeatures, closed: dict[str, bool], t: float
+        self,
+        feats: FaceFeatures,
+        closed: dict[str, bool],
+        openness: dict[str, float],
+        t: float,
     ) -> list[GestureEvent]:
         """The pointer's movement since last frame, as scroll: up/right positive."""
-        target = self._target(feats, closed)
-        if target is None:
-            return []
-        # Through the cursor filter, which keeps it warm for when the mouth
-        # closes and the cursor picks up from the face's current aim.
-        x, y = self.cursor_filter(target[0], target[1], t)
+        # Through the cursor's filters, which keeps them warm for when the
+        # mouth closes and the cursor picks up from the face's current aim.
+        x, y = self._aim(feats, closed, openness, t)
         last, self._scroll_last = self._scroll_last, (x, y)
         if last is None:
             return []
@@ -441,30 +531,12 @@ class FaceRecognizer:
             if abs(deltas[name]) >= self.cfg.axis_deadzone
         ]
 
-    def _nose_steer(self, feats: FaceFeatures, t: float) -> tuple[float, float] | None:
-        """From where the cursor was before the eye shut, moved by the nose alone.
-
-        The nose moves it as much as it would in head mode.
-        """
-        if self._nose_anchor is None:
-            start = self._rewound(t)
-            if start is None:
-                return None
-            self._nose_anchor = (start, feats.head)
-            # Restarted on the anchor, so the cursor does not glide back to it.
-            self.cursor_filter.reset()
-        (x0, y0), (hx0, hy0) = self._nose_anchor
-        c = self.cfg
-        x = x0 + 0.5 * (feats.head[0] - hx0) / max(c.head_range_x, 1e-6)
-        y = y0 + 0.5 * (feats.head[1] - hy0) / max(c.head_range_y, 1e-6)
-        return self.cursor_filter(min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0), t)
-
-    def _rewound(self, t: float) -> tuple[float, float] | None:
-        """The cursor as it was `face_rewind` seconds ago (or as far back as known)."""
-        if not self._history:
+    def _rewound(self, history, t: float) -> tuple[float, float] | None:
+        """A point as it was `face_rewind` seconds ago (or as far back as known)."""
+        if not history:
             return None
-        before = [h for h in self._history if h[0] <= t - self.cfg.face_rewind]
-        _, x, y = before[-1] if before else self._history[0]
+        before = [h for h in history if h[0] <= t - self.cfg.face_rewind]
+        _, x, y = before[-1] if before else history[0]
         return x, y
 
     # --- HUD -----------------------------------------------------------------

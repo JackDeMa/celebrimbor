@@ -127,11 +127,10 @@ class GestureEngine:
     def tune_filter(self, min_cutoff: float, beta: float) -> None:
         """New One Euro parameters, live: the face's when it is on, else the hands'."""
         if self.face is not None:
-            filters = [self.face.cursor_filter]
-        else:
-            filters = [r.cursor_filter for r in self.recognizers.values()]
-        for f in filters:
-            f.tune(min_cutoff, beta)
+            self.face.tune(min_cutoff, beta)  # the pupils' with the eyes on
+            return
+        for recognizer in self.recognizers.values():
+            recognizer.cursor_filter.tune(min_cutoff, beta)
 
     # ------------------------------------------------------------------
     def set_enabled(self, value: bool, detail: str = "Ctrl+Alt+P to resume") -> None:

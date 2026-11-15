@@ -4,12 +4,12 @@ Only a handful of them are used:
     1                  nose tip
     33, 133            corners of one eye     160, 144, 158, 153  its eyelids
     263, 362           corners of the other   385, 380, 387, 373  its eyelids
-    468, 473           centres of the two irises
+    468-472, 473-477   the two irises: centre plus four points on the rim
     13, 14             inner lips
 
 Everything is measured in units of the face itself (the distance between the
-eyes, the width of one eye) and with the head's roll taken out, so neither
-sitting closer to the webcam nor tilting the head sideways moves the cursor.
+eyes) and with the head's roll taken out, so neither sitting closer to the
+webcam nor tilting the head sideways moves the cursor.
 """
 
 from dataclasses import dataclass
@@ -17,7 +17,9 @@ from math import atan2, cos, hypot, sin
 
 NOSE_TIP = 1
 UPPER_LIP, LOWER_LIP = 13, 14
-IRIS_CENTRES = (468, 473)
+# Centre first, then the rim. All five are averaged: the pupil is a few pixels
+# wide and each landmark trembles on its own.
+IRISES = (range(468, 473), range(473, 478))
 
 # corners, then the two eyelid pairs (upper, lower) used for the aspect ratio
 _EYES = (
@@ -56,7 +58,7 @@ class FaceFeatures:
 
     points: list[Point]          # image coordinates, for the preview
     head: Point                  # nose tip relative to the eyes, in eye distances
-    gaze: dict[str, Point]       # per eye: iris relative to its corners, in eye widths
+    gaze: dict[str, Point]       # per eye: iris relative to its corners, in eye distances
     eye_open: dict[str, float]   # per eye: eye aspect ratio (height over width)
     mouth_open: float            # inner lip gap, in eye distances
     nose_point: Point            # image coordinates, for the preview
@@ -93,7 +95,11 @@ def extract(landmarks, aspect: float = 4.0 / 3.0, mirrored: bool = True) -> Face
     hx, hy = upright(sq[NOSE_TIP][0] - mid[0], sq[NOSE_TIP][1] - mid[1])
     head = (flip * hx / iod, hy / iod)
 
-    irises = [sq[i] for i in IRIS_CENTRES if i < len(sq)]
+    irises = [
+        (sum(sq[i][0] for i in ring) / len(ring), sum(sq[i][1] for i in ring) / len(ring))
+        for ring in IRISES
+        if ring[-1] < len(sq)
+    ]
     gaze: dict[str, Point] = {}
     eye_open: dict[str, float] = {}
     for side, ((a, b), lids) in zip(sides, eyes):
@@ -105,7 +111,9 @@ def extract(landmarks, aspect: float = 4.0 / 3.0, mirrored: bool = True) -> Face
             # numbers first is its business, which eye it sits in is not.
             iris = min(irises, key=lambda p: _dist(p, centre))
             gx, gy = upright(iris[0] - centre[0], iris[1] - centre[1])
-            gaze[side] = (flip * gx / width, gy / width)
+            # Over the eye distance, not the eye's own width: that one is
+            # short, and its two corners tremble as much as the iris does.
+            gaze[side] = (flip * gx / iod, gy / iod)
 
     return FaceFeatures(
         points=pts,
