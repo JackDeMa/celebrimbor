@@ -127,8 +127,7 @@ class CelebrimborApp:
         self._mouse_moved_at = 0.0
         self._frame_no = 0
         self._hands: list = []
-        # HUD layers, built for the first frame's size: scanlines, glow
-        self._scan = None
+        # HUD glow layer, built for the first frame's size
         self._glow = None
         # what Reset goes back to: every filter's values at launch
         self._tuning_start = {
@@ -509,12 +508,10 @@ class CelebrimborApp:
         hand_states = [s for s in states if s.hand != FACE_SLOT and self.cfg.use_hand]
         face_state = next((s for s in states if s.hand == FACE_SLOT), None)
 
-        # The picture steps back, dimmed and scanlined, so the lines stand out.
-        if self._scan is None or self._scan.shape != frame.shape:
-            self._scan = np.zeros_like(frame)
-            self._scan[::3] = 12
+        # The glow layer is built for the first frame's size; the picture itself
+        # is left untouched.
+        if self._glow is None or self._glow.shape[:2] != (h // 2, w // 2):
             self._glow = np.zeros((h // 2, w // 2, 3), np.uint8)
-        cv2.addWeighted(frame, 0.7, self._scan, -1.0, 0, dst=frame)
 
         if self.show_skeleton and (hands or face_landmarks is not None):
             # Twice: into a black layer at half size, blurred and added (the
