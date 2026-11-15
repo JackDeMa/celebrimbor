@@ -44,12 +44,12 @@ _SWP_FRAMECHANGED = 0x0020
 _SPI_GETWORKAREA = 0x0030
 
 # Same palette as the preview HUD, written the way Tk wants it.
-_BG = "#141414"
-_LINE = "#333333"
-_GREEN = "#78e678"
-_GREY = "#aaaaaa"
-_RED = "#f05050"
-_YELLOW = "#f0dc3c"
+_BG = "#070B10"
+_LINE = "#1C2E3B"
+_GREEN = "#3DFFA8"
+_GREY = "#5E7787"
+_RED = "#FF3B5C"
+_YELLOW = "#FFB020"
 
 
 def _work_area() -> tuple[int, int, int, int]:
@@ -79,7 +79,9 @@ class Overlay:
         self.root.attributes("-alpha", opacity)
         self.root.configure(bg=_BG)
 
-        frame = tk.Frame(self.root, bg=_BG, padx=12, pady=8)
+        frame = tk.Frame(
+            self.root, bg=_BG, padx=12, pady=8, highlightthickness=1, highlightbackground="#0B5563"
+        )
         frame.pack(fill="both", expand=True)
 
         self._hands: dict[str, tk.Label] = {}

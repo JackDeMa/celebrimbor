@@ -196,10 +196,10 @@ Two details make it seamless:
   forever. While a click or a drag is in progress the reference freezes,
   otherwise a long drag would eat it.
 
-The preview shows all of it: a circle highlights the point currently driving the
-cursor (green = index finger, red = palm), the header says `[index]` or `[palm]`,
-and on each pinch bar the grey tick is the anchoring threshold (which moves on
-its own) while the red one is the click threshold.
+The preview shows all of it: a crosshair marks the point currently driving the
+cursor (cyan = index finger, amber = palm), the header says `[index]` or `[palm]`,
+and on each pinch bar the tick underneath is the anchoring threshold (which moves
+on its own) while the red triangle is the click threshold.
 
 With `anchor_point` you can pick a different reference: `palm_outer` (default),
 `palm_center`, `pinky_mcp`, `index_mcp`, `wrist`.
@@ -218,11 +218,16 @@ or `"pointer": "head"` in `settings`. On the first run the
 
 - **`head`** - turn your head and the cursor follows, about 17 degrees from the
   centre to the edge of the screen. Steady and precise: the one to start with.
-- **`eyes`** - the pupils, measured against the corners of each eye, plus most
-  of the head's turn (you rarely look at a corner without turning towards it a
-  little). Hands-free and nearly head-free, but a webcam sees the pupil at a
-  handful of pixels: it aims at buttons and icons, not at characters, and it
-  wants good, even light on the face.
+- **`eyes`** - head and pupils together: the head places the cursor exactly as
+  in `head` mode and the pupils nudge it from there towards where you look, by
+  at most 6% of the screen sideways and 8% up or down (`eyes_fine_x` /
+  `eyes_fine_y`). A webcam sees the pupil at a handful of pixels, so its
+  jitter is kept inside that patch instead of being spread over the screen.
+  The pupils are skipped on frames where an eye is half shut or the two eyes
+  disagree (a reflection on glasses), and their centre follows your posture
+  over about 30 s. It wants good, even light on the face.
+- **Eyes alone** (Head switched off in the window) - the pupils over the whole
+  screen. Head-free, but it aims at buttons and icons, not at characters.
 
 **Calibration.** For the first 1.5 seconds the program measures your neutral
 pose: **look at the centre of the screen** while the `CALIBRATING` bar fills.
@@ -261,10 +266,11 @@ focused) and calibrate again.
   habitually is, the maximum over the last two seconds, not against a fixed
   threshold: it works with narrow eyes, wide eyes and glasses alike. The
   `LEYE` / `REYE` bars in the preview show each eye's opening, with the red
-  tick where it counts as shut.
-- **With an eye shut only the nose steers**: with `--pointer eyes`, during a
-  wink (click) or a wink-drag the pupils are ignored - the lid drags them - and
-  the cursor moves from where it was with the nose alone, as in head mode.
+  triangle where it counts as shut.
+- **With an eye shut only the head steers**: with `--pointer eyes`, during a
+  wink (click) or a wink-drag the pupils are not read - the lid drags them.
+  Their nudge stays as it was 0.2 s before the eye shut and the head goes on
+  moving the cursor, as in head mode.
 - **Not everyone can wink one eye at a time.** Bind the mouth instead:
   `"mouth_open_tap": "left_click", "mouth_open_hold": "drag"` - mind that it
   then fires when you talk or yawn.
@@ -455,6 +461,28 @@ does not move. Restart Terminal after granting a permission.
   System Settings → Keyboard → Keyboard Shortcuts → Mission Control (the
   default).
 - No always-on-top overlay: the preview window is the only HUD.
+- If the `celebrimbor` folder is read-only, settings are kept in
+  `~/Library/Application Support/celebrimbor/gestures.json`.
+
+## Building the executable
+
+```
+python -m pip install -r requirements.txt pyinstaller==6.22.2
+pyinstaller --noconfirm celebrimbor.spec
+dist/celebrimbor/celebrimbor --selftest
+```
+
+The build is self-contained: both models are bundled (the spec stops with an
+error if `models/hand_landmarker.task` or `models/face_landmarker.task` is
+missing - start the app once from source to download them), so the executable
+never needs the network. Pushing a `v*` tag makes GitHub Actions build the
+Windows and macOS zips, run `--list-gestures` and `--selftest` on them and
+attach them to a release.
+
+`gestures.json` is read from next to the executable. If it is missing there, or
+the folder is not writable (e.g. under `Program Files`), a per-user copy is used
+instead: `%APPDATA%\celebrimbor\gestures.json` on Windows,
+`~/Library/Application Support/celebrimbor/gestures.json` on macOS.
 
 ## Command-line options
 
@@ -464,10 +492,14 @@ main.py [--config gestures.json] [--camera 0]
         [--width 640] [--height 480] [--fps 30]
         [--no-preview] [--no-overlay] [--no-mirror] [--dry-run]
         [--smoothing 1.2] [--sensitivity 1.0] [--model PATH]
-        [--face-model PATH] [--list-gestures]
+        [--face-model PATH] [--list-gestures] [--selftest] [--version]
 ```
 
 Command-line options take precedence over the `settings` section of the JSON.
+
+- `--selftest` - loads both models, runs them once on a blank frame, prints
+  `OK` and exits with 0 (non-zero on failure). No camera, no download.
+- `--version` - prints the version.
 
 - `--hands` - how many hands to track at once, 1 or 2 (default 2); 0 tracks
   none, for the head or eye pointer on its own.
@@ -487,15 +519,18 @@ Command-line options take precedence over the `settings` section of the JSON.
 
 ## Preview
 
-A dark window, the same on Windows and macOS (CustomTkinter). On the left the
-camera image, with a status bar above it - what each hand and the face is
-doing, a dot on whoever holds the cursor, `PAUSED` / `DRY-RUN`, the fps - and
-the last events underneath. On the right the controls and the gesture list.
+A dark HUD-style window (near-black panels, cyan lines, monospace labels), the
+same on Windows and macOS (CustomTkinter). On the left the camera image, with a
+status bar above it - what each hand and the face is doing, a `▸` on whoever
+holds the cursor, `PAUSED` / `DRY-RUN`, the fps - and the last events
+underneath. On the right the controls and the gesture list.
 
-On the image itself: the hand and face skeletons, the rectangle of the
-**active area** (the portion of the frame mapped onto the whole screen), the
-reference point in use, the `IDX` / `MID` / `RNG` bars with each pinch distance
-(red tick = click threshold, grey tick = palm anchoring threshold), the
+On the image itself, dimmed so the lines stand out: the glowing hand and face
+skeletons (amber rings on the fingers in charge, a reticle on each iris), the
+corner brackets of the **active area** (the portion of the frame mapped onto
+the whole screen), the crosshair of the reference point in use, the `IDX` /
+`MID` / `RNG` bars with each pinch distance (red triangle = click threshold,
+tick underneath = palm anchoring threshold; amber = pinched), the
 `FIST STILL` bar while you hold your fist closed, the `LEYE` / `REYE` bars and
 the calibration and pause progress. Only the bars of pinches actually bound to
 an action are shown.
@@ -507,7 +542,7 @@ an action are shown.
 | Hand | The index finger |
 | Head / nose | The nose, as a joystick |
 | Eyes / pupils | The pupils alone |
-| Head + Eyes | The pupils plus the head's turn (what `--pointer eyes` does) |
+| Head + Eyes | The head, with the pupils refining the aim (what `--pointer eyes` does) |
 | Hand + Head / Eyes | A hand pointing in view takes the cursor; out of view, the face has it back |
 
 Switching the head or the eyes on starts with the calibration: look at the
@@ -531,8 +566,9 @@ Steady steps through 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 15, 20 and
 Speed through 0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10,
 15, 20: round numbers, finer where a small change is felt. A value saved off
 these steps snaps to the nearest one in the direction pressed. Steady and Speed
-tune the face (`head_min_cutoff` or `eyes_min_cutoff`, `face_beta`) when the
-head or the eyes are on, the hand (`min_cutoff`, `beta`) otherwise - the line
+tune the pupils (`eyes_fine_cutoff`, `eyes_fine_beta`) when the eyes are on,
+the head (`head_min_cutoff`, `face_beta`) when only the head is, the hand
+(`min_cutoff`, `beta`) otherwise - the line
 under *Cursor* says which; see [Tuning](#tuning). A high Speed lets tremor
 through as if it were movement: lower it before raising Steady.
 
@@ -653,13 +689,28 @@ overridden from the `settings` section of the JSON:
 - `head_range_x` / `head_range_y` - nose travel, in eye distances, from the
   centre to the edge of the screen (0.15 is about 17 degrees of head turn).
   Lower them to move your head less.
-- `eyes_range_x` / `eyes_range_y` - pupil travel, in eye widths, that does the
-  same. `eyes_head_gain` - how much the head's turn counts in eyes mode (0 =
-  pupils only).
-- `head_min_cutoff` / `eyes_min_cutoff` / `face_beta` - One Euro filter of the
-  face cursor; the pupils jitter far more than the head and get a much lower
-  cutoff. Lower cutoff = steadier when still; higher beta = less lag on fast
-  movements.
+- `eyes_range_x` / `eyes_range_y` - pupil travel that does the same, now in
+  eye distances too (defaults 0.06 / 0.035): a value saved in eye widths wants
+  multiplying by about 0.45.
+- `head_min_cutoff` / `face_beta` - One Euro filter of the head's cursor.
+  Lower cutoff = steadier when still; higher beta = less lag on fast movements.
+- `eyes_fine_x` / `eyes_fine_y` - with head and eyes together, how far the
+  pupils may move the cursor from where the head puts it, as a fraction of the
+  screen (0.06 / 0.08). `eyes_fine_gain` - 1 takes it all the way to where you
+  look; lower pulls it back towards the nose.
+- `eyes_fine_cutoff` / `eyes_fine_beta` - One Euro filter of the pupils (0.5 /
+  0: their speed is mostly noise). `eyes_fine_deadband` - pupil movement
+  ignored after it, as a fraction of the screen (0.02).
+- `eyes_head_comp_x` / `eyes_head_comp_y` - how much of the nose's travel is
+  taken out of the pupils' (0.5 / 0.4): turning the head shifts the iris
+  between the eye's corners on its own. If turning the head overshoots what
+  head mode does, raise it; if it falls short, lower it.
+- `eyes_recentre_seconds` - how slowly the pupils' centre follows their
+  average (30; 0 = never).
+- `eyes_min_open` / `eyes_max_disagree` - frames on which the pupils are not
+  read: an eye less open than this (0.8 of habitual), or the two eyes apart by
+  more than this fraction of `eyes_range` (0.6).
+- `eyes_head_gain` / `eyes_min_cutoff` - obsolete, ignored.
 - `pause_fists_seconds` - how long both fists must stay closed to pause.
 - `mouse_pause_seconds` - how long the real mouse must rest before an automatic
   pause lifts; 0 never pauses for the mouse.
@@ -742,8 +793,9 @@ the description in the original paper:
 > Interactive Systems.* CHI 2012, pp. 2527-2530.
 > <https://gery.casiez.net/1euro/>
 
-The MediaPipe models are downloaded at runtime and is **not** included in the
-repository (see [.gitignore](.gitignore)); Google's Apache 2.0 licence applies.
+The MediaPipe models are **not** included in the repository (see
+[.gitignore](.gitignore)): a source checkout downloads them on first run, the
+release builds bundle them. Google's Apache 2.0 licence applies.
 Mind pynput's licence: it is **LGPL v3**. Installed from pip, as it is here, it
 imposes nothing on this project; but bundling it inside a frozen executable
 (PyInstaller and the like) does trigger the LGPL obligations, which require

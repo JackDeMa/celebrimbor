@@ -1,9 +1,11 @@
 """Main loop: webcam capture -> landmarks (hands, face) -> gestures -> mouse."""
 
+import functools
 import sys
 import time
 
 import cv2
+import numpy as np
 from pynput import keyboard
 
 from . import bindings as bindings_mod
@@ -12,14 +14,17 @@ from .config import Config
 from .controller import MouseActuator
 from .detector import (
     DEFAULT_FACE_MODEL_PATH,
+    DEFAULT_MODEL_PATH,
     FACE_CONNECTIONS,
     FACE_MODEL_URL,
     HAND_CONNECTIONS,
     FaceDetector,
     HandDetector,
     ensure_model,
+    have_model,
 )
 from .engine import FACE_SLOT, EngineState, GestureEngine
+from .splash import Splash
 
 # The values Steady (1 / cutoff) and Speed (beta) step through: round numbers,
 # finer where a small change is felt, coarser where it is not.
@@ -41,14 +46,22 @@ def _ladder_step(ladder: tuple, value: float, direction: int) -> float:
 _FILTER_KEYS = {
     "hand": ("min_cutoff", "beta"),
     "head": ("head_min_cutoff", "face_beta"),
-    "eyes": ("eyes_min_cutoff", "face_beta"),
+    "eyes": ("eyes_fine_cutoff", "eyes_fine_beta"),
 }
 
-_GREEN = (120, 230, 120)
-_GREY = (170, 170, 170)
-_RED = (80, 80, 240)
-_YELLOW = (60, 220, 240)
-_WHITE = (245, 245, 245)
+# The HUD palette, in BGR: the same colours as the window around the picture.
+_CYAN = (255, 229, 0)      # the main line colour
+_DIM = (99, 85, 11)        # empty cells, hairlines
+_MESH = (150, 128, 16)     # face mesh: between the two
+_AMBER = (32, 176, 255)    # armed, palm anchor, the fingers in charge
+_ALERT = (92, 59, 255)     # thresholds
+_OK = (168, 255, 61)
+_TEXT = (242, 233, 207)
+_MUTED = (135, 119, 94)
+_PANEL = (28, 20, 13)
+_FONT = cv2.FONT_HERSHEY_DUPLEX
+_AA = cv2.LINE_AA
+_CELLS, _CELL_W = 12, 9    # a bar: this many cells, this many pixels apart
 
 
 # macOS virtual key codes. Option turns letters into other characters (Option+Q
@@ -114,6 +127,9 @@ class CelebrimborApp:
         self._mouse_moved_at = 0.0
         self._frame_no = 0
         self._hands: list = []
+        # HUD layers, built for the first frame's size: scanlines, glow
+        self._scan = None
+        self._glow = None
         # what Reset goes back to: every filter's values at launch
         self._tuning_start = {
             k: getattr(cfg, k)
@@ -299,7 +315,7 @@ class CelebrimborApp:
     def _face_detector(self) -> FaceDetector:
         """Built the first time the head or the eyes are switched on."""
         model = ensure_model(
-            self.cfg.face_model_path or DEFAULT_FACE_MODEL_PATH, FACE_MODEL_URL, "FaceLandmarker"
+            self.cfg.face_model_path or DEFAULT_FACE_MODEL_PATH, FACE_MODEL_URL, "face"
         )
         return FaceDetector(
             model,
@@ -307,19 +323,17 @@ class CelebrimborApp:
             min_tracking_confidence=self.cfg.min_tracking_confidence,
         )
 
-    def run(self) -> int:
-        face_detector = None
+    def _load_detectors(self, splash: Splash):
+        """The slow part of starting: models (downloaded if missing), MediaPipe."""
         # Loaded with the hands off too: the two fists that pause are watched anyway.
-        model_path = (
-            ensure_model(self.cfg.model_path) if self.cfg.model_path else ensure_model()
+        model_path = ensure_model(
+            self.cfg.model_path or DEFAULT_MODEL_PATH, progress=splash.download("hand")
         )
-        if self.engine.face is not None:
-            face_detector = self._face_detector()
-
-        cap = self._open_camera()
-        if cap is None:
-            return 1
-
+        # The face model even with the head off: it can be switched on at any
+        # time, and a download then would freeze the window.
+        ensure_model(self.cfg.face_model_path or DEFAULT_FACE_MODEL_PATH, FACE_MODEL_URL,
+                     "face", splash.download("face"))
+        splash.status("Loading hand model...")
         detector = HandDetector(
             model_path,
             num_hands=min(2, self.cfg.num_hands) or 2,
@@ -327,6 +341,27 @@ class CelebrimborApp:
             min_tracking_confidence=self.cfg.min_tracking_confidence,
             mirrored=self.cfg.mirror,
         )
+        face_detector = None
+        if self.engine.face is not None:
+            splash.status("Loading face model...")
+            face_detector = self._face_detector()
+        return detector, face_detector
+
+    def run(self) -> int:
+        # The splash shows with a window to wait for, and for a download always.
+        missing = not (have_model(self.cfg.model_path or DEFAULT_MODEL_PATH)
+                       and have_model(self.cfg.face_model_path or DEFAULT_FACE_MODEL_PATH))
+        with Splash(self.cfg.show_preview or missing) as splash:
+            detector, face_detector = splash.run(self._load_detectors, splash)
+            # On the main thread: macOS only asks for camera access from there.
+            splash.status("Starting camera...")
+            cap = self._open_camera()
+        if cap is None:
+            detector.close()
+            if face_detector is not None:
+                face_detector.close()
+            return 1
+
         if self.cfg.show_preview:
             from .window import ControlWindow  # Tk only when there is a window
 
@@ -474,22 +509,36 @@ class CelebrimborApp:
         hand_states = [s for s in states if s.hand != FACE_SLOT and self.cfg.use_hand]
         face_state = next((s for s in states if s.hand == FACE_SLOT), None)
 
-        if self.show_skeleton:
-            for obs in hands:
-                self._draw_hand(frame, obs.landmarks, w, h)
+        # The picture steps back, dimmed and scanlined, so the lines stand out.
+        if self._scan is None or self._scan.shape != frame.shape:
+            self._scan = np.zeros_like(frame)
+            self._scan[::3] = 12
+            self._glow = np.zeros((h // 2, w // 2, 3), np.uint8)
+        cv2.addWeighted(frame, 0.7, self._scan, -1.0, 0, dst=frame)
+
+        if self.show_skeleton and (hands or face_landmarks is not None):
+            # Twice: into a black layer at half size, blurred and added (the
+            # glow), then crisp on top.
+            self._glow[:] = 0
             if face_landmarks is not None:
-                self._draw_face(frame, face_landmarks, w, h)
+                face_pts = np.array([(lm.x * w, lm.y * h) for lm in face_landmarks], np.int32)
+            for layer, div in ((self._glow, 2), (frame, 1)):
+                fw, fh = w / div, h / div
+                if face_landmarks is not None:
+                    self._draw_face(layer, face_pts // div, div == 1)
+                for obs in hands:
+                    pts = [(int(lm.x * fw), int(lm.y * fh)) for lm in obs.landmarks]
+                    self._draw_hand(layer, pts, obs.slot, div == 1)
+                if div == 2:
+                    glow = cv2.GaussianBlur(layer, (7, 7), 0)
+                    cv2.add(frame, cv2.resize(glow, (w, h)), dst=frame)
 
         c = self.cfg
         if c.use_hand:
             # The active area only means something while a hand can point.
-            cv2.rectangle(
-                frame,
-                (int(c.active_x_min * w), int(c.active_y_min * h)),
-                (int(c.active_x_max * w), int(c.active_y_max * h)),
-                _GREY,
-                1,
-            )
+            x0, y0 = int(c.active_x_min * w), int(c.active_y_min * h)
+            _brackets(frame, x0, y0, int(c.active_x_max * w), int(c.active_y_max * h), _MUTED, 16)
+            _text(frame, "ACTIVE AREA", (x0 + 6, y0 + 14), _MUTED, 0.35)
 
         # The point actually driving the cursor: during a pinch it moves from
         # the index finger to the palm, and you can see it here.
@@ -497,9 +546,7 @@ class CelebrimborApp:
             if state.ref_point is None:
                 continue
             rp = (int(state.ref_point[0] * w), int(state.ref_point[1] * h))
-            anchored = state.cursor_source == "palm"
-            cv2.circle(frame, rp, 11, _RED if anchored else _GREEN, 2)
-            cv2.circle(frame, rp, 2, _RED if anchored else _GREEN, -1)
+            _reticle(frame, rp, 11, _AMBER if state.cursor_source == "palm" else _CYAN)
 
         if face_state is not None:
             self._draw_face_readouts(frame, face_state, w, h)
@@ -534,61 +581,59 @@ class CelebrimborApp:
                 frame, "FIST STILL", state.fist_hold_progress, x, h - 40 - 22 * len(shown)
             )
 
-    def _draw_hand(self, frame, landmarks, w: int, h: int) -> None:
-        pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
+    def _draw_hand(self, img, pts: list, slot: str, crisp: bool) -> None:
+        if not crisp:  # the glow layer: only the bones shine
+            for a, b in HAND_CONNECTIONS:
+                cv2.line(img, pts[a], pts[b], _CYAN, 1)
+            return
         for a, b in HAND_CONNECTIONS:
-            cv2.line(frame, pts[a], pts[b], _WHITE, 2)
+            cv2.line(img, pts[a], pts[b], _CYAN, 1, _AA)
         for i, p in enumerate(pts):
-            # highlight thumb, index, middle and ring: the fingers in charge
-            highlight = i in (hand.THUMB_TIP, hand.INDEX_TIP, hand.MIDDLE_TIP, hand.RING_TIP)
-            cv2.circle(frame, p, 6 if highlight else 3, _YELLOW if highlight else _GREEN, -1)
+            cv2.circle(img, p, 2, _PANEL, -1)
+            cv2.circle(img, p, 3, _CYAN, 1, _AA)
+            # ringed: thumb, index, middle and ring, the fingers in charge
+            if i in (hand.THUMB_TIP, hand.INDEX_TIP, hand.MIDDLE_TIP, hand.RING_TIP):
+                cv2.circle(img, p, 7, _AMBER, 1, _AA)
+        xs, ys = zip(*pts)
+        x0, y0 = min(xs) - 14, min(ys) - 14
+        _brackets(img, x0, y0, max(xs) + 14, max(ys) + 14, _CYAN)
+        _text(img, f"{slot.upper()} HAND", (x0, y0 - 6), _CYAN)
 
     def _draw_face_readouts(self, frame, state: EngineState, w: int, h: int) -> None:
         """Where the nose points, the calibration, how open each eye is."""
         if state.ref_point is not None:
             rp = (int(state.ref_point[0] * w), int(state.ref_point[1] * h))
-            cv2.circle(frame, rp, 9, _GREEN, 2)
+            _reticle(frame, rp, 9, _CYAN)
 
         if state.calibration > 0.0:
             self._progress(frame, "CALIBRATING", state.calibration, w // 2 - 120, h // 2)
 
-        # Openness of each eye, 1 = habitual: the tick is where it counts as shut.
+        # Openness of each eye, 1 = habitual: the triangle is where it counts as shut.
         for i, side in enumerate(face.EYE_SIDES):
             if side in state.eyes:
-                self._eye_bar(frame, f"{side[0].upper()}EYE", state.eyes[side], 10, 12 + i * 20)
+                self._eye_bar(frame, f"{side[0].upper()}EYE", state.eyes[side], 10, 14 + i * 22)
 
     def _eye_bar(self, frame, label: str, value: float, x: int, y: int) -> None:
-        ratio = min(max(value, 0.0), 1.0)
-        x0, width = x + 50, 110
         shut = value < self.cfg.eye_closed_ratio
-        cv2.putText(frame, label, (x, y + 11), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _GREY, 1)
-        cv2.rectangle(frame, (x0, y), (x0 + width, y + 12), _GREY, 1)
-        cv2.rectangle(
-            frame, (x0, y), (x0 + int(width * ratio), y + 12), _YELLOW if shut else _GREEN, -1
-        )
-        thr = x0 + int(width * self.cfg.eye_closed_ratio)
-        cv2.line(frame, (thr, y - 2), (thr, y + 14), _RED, 1)
+        _meter(frame, label, value, value, x, y, _AMBER if shut else _CYAN,
+               self.cfg.eye_closed_ratio)
 
-    def _draw_face(self, frame, landmarks, w: int, h: int) -> None:
-        pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
-        for a, b in FACE_CONNECTIONS:
-            if a < len(pts) and b < len(pts):
-                cv2.line(frame, pts[a], pts[b], _GREY, 1)
-        for i in face.IRIS_CENTRES:
-            if i < len(pts):
-                cv2.circle(frame, pts[i], 2, _YELLOW, -1)
+    def _draw_face(self, img, pts, crisp: bool) -> None:
+        """The mesh in one call; on the crisp pass, a reticle on each iris."""
+        cv2.polylines(img, pts[_face_segments(len(pts))], False, _MESH, 1,
+                      _AA if crisp else cv2.LINE_8)
+        if crisp:
+            for ring in face.IRISES:  # the centre first, then its edge
+                if ring[-1] < len(pts):
+                    _reticle(img, tuple(pts[ring[0]].tolist()), 7, _CYAN, time.monotonic())
 
     def _progress(self, frame, label: str, ratio: float, x: int, y: int) -> None:
-        x0, width = x + 40, 160
-        cv2.putText(frame, label, (x0, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, _GREY, 1)
-        cv2.rectangle(frame, (x0, y), (x0 + width, y + 10), _GREY, 1)
-        cv2.rectangle(
-            frame,
-            (x0, y),
-            (x0 + int(width * min(max(ratio, 0.0), 1.0)), y + 10),
-            _YELLOW if ratio < 1.0 else _GREEN,
-            -1,
-        )
+        ratio = min(max(ratio, 0.0), 1.0)
+        x0 = x + 40
+        _panel(frame, x0 - 6, y - 18, x0 + 16 * _CELL_W + 46, y + 16)
+        _text(frame, label, (x0, y - 5), _TEXT)
+        _cells(frame, x0, y, ratio, _AMBER if ratio < 1.0 else _OK, 16)
+        _text(frame, f"{ratio * 100:3.0f}%", (x0 + 16 * _CELL_W + 6, y + 9), _TEXT)
 
     def _bar(
         self,
@@ -600,20 +645,93 @@ class CelebrimborApp:
         anchor_at: float | None = None,
     ) -> None:
         full = 1.2  # full-scale value of the bar
-        ratio = min(max(value / full, 0.0), 1.0)
-        x0, width = x + 40, 110
-        active = value < self.cfg.pinch_on
-        cv2.putText(frame, label, (x, y + 11), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _GREY, 1)
-        cv2.rectangle(frame, (x0, y), (x0 + width, y + 12), _GREY, 1)
-        cv2.rectangle(
-            frame,
-            (x0, y),
-            (x0 + int(width * ratio), y + 12),
-            _YELLOW if active else _GREEN,
-            -1,
+        armed = value < self.cfg.pinch_on
+        _meter(frame, label, value, value / full, x, y, _AMBER if armed else _CYAN,
+               self.cfg.pinch_on / full, anchor_at / full if anchor_at else None)
+
+
+# --- HUD primitives -----------------------------------------------------------
+def _text(img, text: str, org, color=_TEXT, scale: float = 0.4) -> None:
+    cv2.putText(img, text, org, _FONT, scale, color, 1, _AA)
+
+
+def _brackets(img, x0: int, y0: int, x1: int, y1: int, color, size: int = 10) -> None:
+    """The four corners of a box, and nothing in between."""
+    corners = [
+        [(x, y + dy * size), (x, y), (x + dx * size, y)]
+        for x, dx in ((x0, 1), (x1, -1))
+        for y, dy in ((y0, 1), (y1, -1))
+    ]
+    cv2.polylines(img, np.array(corners, np.int32), False, color, 1, _AA)
+
+
+def _reticle(img, p, r: int, color, spin: float | None = None) -> None:
+    """A crosshair with a gap in the middle. With `spin` (a time, in seconds)
+    it is an iris lock instead: a ring, four ticks and an arc going round."""
+    x, y = p
+    inner = 4 if spin is None else r - 2
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        cv2.line(img, (x + dx * inner, y + dy * inner),
+                 (x + dx * (r + 3), y + dy * (r + 3)), color, 1, _AA)
+    if spin is None:
+        cv2.circle(img, p, 1, color, -1, _AA)
+    else:
+        cv2.circle(img, p, r, color, 1, _AA)
+        cv2.ellipse(img, p, (r + 6, r + 6), (spin * 200) % 360, 0, 80, color, 1, _AA)
+
+
+def _panel(img, x0: int, y0: int, x1: int, y1: int) -> None:
+    """A translucent dark plate with a hairline border: blends its region only."""
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, w - 1), min(y1, h - 1)
+    if x1 <= x0 or y1 <= y0:
+        return
+    # 30% picture + 70% _PANEL
+    dark = cv2.convertScaleAbs(img[y0:y1, x0:x1], alpha=0.3)
+    img[y0:y1, x0:x1] = cv2.add(dark, (20, 14, 9, 0))
+    cv2.rectangle(img, (x0, y0), (x1, y1), _DIM, 1)
+
+
+@functools.lru_cache(maxsize=256)
+def _cell_strip(lit: int, color: tuple, count: int) -> np.ndarray:
+    strip = np.full((10, count * _CELL_W, 3), _PANEL, np.uint8)
+    for i in range(count):
+        strip[:, i * _CELL_W:(i + 1) * _CELL_W - 2] = color if i < lit else _DIM
+    return strip
+
+
+def _cells(img, x: int, y: int, ratio: float, color, count: int = _CELLS) -> None:
+    """A segmented bar: pasted from a cache, a hundred rectangles a frame add up."""
+    strip = _cell_strip(round(min(max(ratio, 0.0), 1.0) * count), color, count)
+    roi = img[y:y + 10, x:x + strip.shape[1]]
+    roi[:] = strip[:roi.shape[0], :roi.shape[1]]
+
+
+def _meter(img, label: str, value: float, ratio: float, x: int, y: int, color,
+           threshold: float | None = None, mark: float | None = None) -> None:
+    """One readout row: label, segmented bar, number. `threshold` and `mark`
+    are positions along the bar (0..1): a triangle above it, a tick below."""
+    x0, width = x + 46, _CELLS * _CELL_W
+    _panel(img, x - 6, y - 6, x0 + width + 46, y + 16)
+    _text(img, label, (x, y + 9), _MUTED)
+    _cells(img, x0, y, ratio, color)
+    _text(img, f"{value:.2f}", (x0 + width + 6, y + 9), _TEXT)
+    if threshold is not None:
+        t = x0 + int(width * min(threshold, 1.0))
+        cv2.fillConvexPoly(img, np.array([(t - 3, y - 5), (t + 3, y - 5), (t, y - 1)], np.int32),
+                           _ALERT, _AA)
+    if mark is not None:
+        m = x0 + int(width * min(mark, 1.0))
+        cv2.line(img, (m, y + 10), (m, y + 14), _TEXT, 1)
+
+
+_SEGMENTS: dict[int, np.ndarray] = {}
+
+
+def _face_segments(count: int) -> np.ndarray:
+    """FACE_CONNECTIONS as an index array, for a face of `count` landmarks."""
+    if count not in _SEGMENTS:
+        _SEGMENTS[count] = np.array(
+            [(a, b) for a, b in FACE_CONNECTIONS if a < count and b < count], np.intp
         )
-        thr = x0 + int(width * (self.cfg.pinch_on / full))
-        cv2.line(frame, (thr, y - 2), (thr, y + 14), _RED, 1)
-        if anchor_at:
-            a = x0 + int(width * min(anchor_at / full, 1.0))
-            cv2.line(frame, (a, y - 2), (a, y + 14), _GREY, 1)
+    return _SEGMENTS[count]

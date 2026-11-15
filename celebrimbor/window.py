@@ -1,12 +1,14 @@
 """The preview window: webcam image, state, switches and tuning in one place.
 
-CustomTkinter on top of Tk: a dark, modern look, the same on Windows and on
-macOS. The main loop drives it with one `show()` per camera frame; there is no
-mainloop of its own, the same way the overlay works.
+CustomTkinter on top of Tk, themed as a HUD: near-black panels, hairline
+borders, cyan lines, monospace labels; the same on Windows and on macOS. The
+main loop drives it with one `show()` per camera frame; there is no mainloop of
+its own, the same way the overlay works.
 
 The window only displays and forwards clicks: every decision stays in the app.
 """
 
+import sys
 import tkinter as tk
 
 import customtkinter as ctk
@@ -16,19 +18,60 @@ from PIL import Image
 from .face import FACE_SLOT
 from .hand import HAND_SLOTS
 
-_GREEN = "#4ade80"
-_RED = "#f87171"
-_AMBER = "#facc15"
-_GREY = "#9ca3af"
-_MUTED = "#6b7280"
+# The palette, shared with the drawing on the picture (app.py) and the overlay.
+_BG = "#070B10"
+_PANEL = "#0D141C"
+_RAISED = "#121C26"
+_LINE = "#1C2E3B"
+_CYAN = "#00E5FF"
+_CYAN_DIM = "#0B5563"
+_AMBER = "#FFB020"
+_RED = "#FF3B5C"
+_GREEN = "#3DFFA8"
+_TEXT = "#CFE9F2"
+_MUTED = "#5E7787"
+
+_MONO = {"win32": "Consolas", "darwin": "Menlo"}.get(sys.platform, "DejaVu Sans Mono")
 _SIDEBAR_W = 320
-_SLOT_NAMES = {"left": "Left", "right": "Right", FACE_SLOT: "Face"}
+_SLOT_NAMES = {"left": "LEFT", "right": "RIGHT", FACE_SLOT: "FACE"}
 
 _KEYS_HELP = (
     "q quit · p pause · h skeleton · o overlay\n"
     "c calibrate · d swap hand\n"
     "Ctrl+Alt+Q / P / C / Space from anywhere"
 )
+
+# Laid over CustomTkinter's stock theme: only what the window uses.
+_THEME = {
+    "CTk": {"fg_color": _BG},
+    "CTkToplevel": {"fg_color": _BG},
+    "CTkFrame": {
+        "corner_radius": 3, "border_width": 1, "fg_color": _PANEL,
+        "top_fg_color": _RAISED, "border_color": _LINE,
+    },
+    "CTkButton": {
+        "corner_radius": 2, "border_width": 1, "fg_color": "transparent",
+        "hover_color": _CYAN_DIM, "border_color": _CYAN, "text_color": _CYAN,
+        "text_color_disabled": _MUTED,
+    },
+    "CTkLabel": {"corner_radius": 0, "text_color": _TEXT},
+    "CTkEntry": {
+        "corner_radius": 2, "border_width": 1, "fg_color": _BG,
+        "border_color": _LINE, "text_color": _TEXT,
+    },
+    "CTkSwitch": {
+        "corner_radius": 3, "fg_color": _LINE, "progress_color": _CYAN,
+        "button_color": _TEXT, "button_hover_color": "#FFFFFF", "text_color": _TEXT,
+    },
+    "CTkScrollbar": {
+        "corner_radius": 2, "fg_color": "transparent",
+        "button_color": _LINE, "button_hover_color": _CYAN_DIM,
+    },
+}
+
+
+def _mono(size: int = 11, bold: bool = False) -> ctk.CTkFont:
+    return ctk.CTkFont(family=_MONO, size=size, weight="bold" if bold else "normal")
 
 
 class ControlWindow:
@@ -39,7 +82,10 @@ class ControlWindow:
         self._gesture_key = None
 
         ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
+        for widget, options in _THEME.items():
+            ctk.ThemeManager.theme[widget].update(options)
+        if sys.platform == "win32":  # macOS keeps the stock theme's SF
+            ctk.ThemeManager.theme["CTkFont"]["family"] = "Segoe UI"
         self.root = ctk.CTk()
         self.root.title("Celebrimbor")
         self.root.resizable(False, False)
@@ -58,50 +104,57 @@ class ControlWindow:
 
     # --- layout ---------------------------------------------------------------
     def _build_main(self, small) -> None:
-        main = ctk.CTkFrame(self.root, fg_color="transparent")
+        main = ctk.CTkFrame(self.root, fg_color="transparent", border_width=0)
         main.grid(row=0, column=0, padx=(14, 7), pady=14, sticky="n")
 
-        status = ctk.CTkFrame(main, corner_radius=10)
+        status = ctk.CTkFrame(main)
         status.pack(fill="x")
         self._chips: dict[str, tuple[ctk.CTkLabel, ctk.CTkLabel]] = {}
         for slot in (*HAND_SLOTS, FACE_SLOT):
-            chip = ctk.CTkFrame(status, fg_color="transparent")
+            chip = ctk.CTkFrame(status, fg_color="transparent", border_width=0)
             chip.pack(side="left", padx=(12, 4), pady=6)
             mode = ctk.CTkLabel(
-                chip, text="", width=150, height=18, anchor="w",
-                font=ctk.CTkFont(size=13, weight="bold"),
+                chip, text="", width=150, height=18, anchor="w", font=_mono(12, bold=True)
             )
             mode.pack(anchor="w")
             detail = ctk.CTkLabel(
-                chip, text="", width=150, height=14, anchor="w", font=small, text_color=_GREY
+                chip, text="", width=150, height=14, anchor="w", font=small, text_color=_MUTED
             )
             detail.pack(anchor="w")
             self._chips[slot] = (mode, detail)
-        self._fps = ctk.CTkLabel(status, text="", font=small, text_color=_MUTED)
+        self._fps = ctk.CTkLabel(status, text="", font=_mono(10), text_color=_MUTED)
         self._fps.pack(side="right", padx=12)
-        self._badge = ctk.CTkLabel(
-            status, text="", corner_radius=6, font=ctk.CTkFont(size=11, weight="bold")
-        )
-        self._badge.pack(side="right")
+        # Outlined, not filled; with nothing to say its border melts into the panel.
+        self._badge_box = ctk.CTkFrame(status, fg_color="transparent", border_color=_PANEL)
+        self._badge_box.pack(side="right")
+        self._badge = ctk.CTkLabel(self._badge_box, text="", height=18, font=_mono(10, bold=True))
+        self._badge.pack(padx=2, pady=2)
 
-        self._video = ctk.CTkLabel(main, text="", corner_radius=10)
-        self._video.pack(pady=(10, 0))
+        video = ctk.CTkFrame(main, fg_color=_BG)
+        video.pack(pady=(10, 0))
+        self._video = ctk.CTkLabel(video, text="")
+        self._video.pack(padx=1, pady=1)
         self._video_image = None
 
-        self._events = ctk.CTkLabel(main, text="", height=22, anchor="w", text_color=_AMBER)
+        self._events = ctk.CTkLabel(
+            main, text="", height=22, anchor="w", font=_mono(11), text_color=_AMBER
+        )
         self._events.pack(fill="x", pady=(6, 0), padx=4)
 
     def _build_sidebar(self, small) -> None:
         app = self.app
-        side = ctk.CTkFrame(self.root, width=_SIDEBAR_W, corner_radius=12)
+        side = ctk.CTkFrame(self.root, width=_SIDEBAR_W)
         side.grid(row=0, column=1, padx=(7, 14), pady=14, sticky="ns")
         side.pack_propagate(False)  # fixed width, the height of the camera column
 
         def section(title: str) -> None:
             ctk.CTkLabel(
-                side, text=title.upper(), anchor="w", text_color=_GREY,
-                font=ctk.CTkFont(size=11, weight="bold"),
-            ).pack(fill="x", padx=18, pady=(14, 2))
+                side, text=f"// {title.upper()}", anchor="w", height=16,
+                text_color=_CYAN, font=_mono(11, bold=True),
+            ).pack(fill="x", padx=18, pady=(14, 3))
+            ctk.CTkFrame(side, height=1, fg_color=_LINE, border_width=0).pack(
+                fill="x", padx=18, pady=(0, 6)
+            )
 
         section("Inputs")
         self._switches: dict[str, ctk.CTkSwitch] = {}
@@ -114,7 +167,7 @@ class ControlWindow:
 
         section("Cursor")
         self._tuning_for = ctk.CTkLabel(
-            side, text="", anchor="w", font=small, text_color=_MUTED, height=14
+            side, text="", anchor="w", font=_mono(10), text_color=_MUTED, height=14
         )
         self._tuning_for.pack(fill="x", padx=18)
         # The values are fields too: type a number, Enter (or click away) applies it.
@@ -132,42 +185,48 @@ class ControlWindow:
              lambda: app.set_deadband(app.cfg.cursor_deadband + 1),
              app.set_deadband),
         ):
-            row = ctk.CTkFrame(side, fg_color="transparent")
+            row = ctk.CTkFrame(side, fg_color="transparent", border_width=0)
             row.pack(fill="x", padx=18, pady=5)
-            text = ctk.CTkFrame(row, fg_color="transparent")
+            text = ctk.CTkFrame(row, fg_color="transparent", border_width=0)
             text.pack(side="left")
             ctk.CTkLabel(text, text=label, anchor="w", height=18).pack(anchor="w")
             ctk.CTkLabel(
                 text, text=hint, anchor="w", height=14, font=small, text_color=_MUTED
             ).pack(anchor="w")
             # packed right to left: - value +
-            ctk.CTkButton(row, text="+", width=32, height=30, command=plus).pack(side="right")
-            value = ctk.CTkEntry(row, width=56, height=30, justify="center")
+            ctk.CTkButton(
+                row, text="+", width=32, height=30, font=_mono(13), command=plus
+            ).pack(side="right")
+            value = ctk.CTkEntry(row, width=56, height=30, justify="center", font=_mono(12))
             value.pack(side="right", padx=4)
             value.bind("<FocusIn>", lambda _e, key=key: self._editing.add(key))
             value.bind("<FocusOut>", lambda _e, key=key, f=typed: self._commit(key, f))
             value.bind("<Return>", lambda _e: self.root.focus_set())  # -> FocusOut
             value.bind("<Escape>", lambda _e, key=key: self._cancel(key))
-            ctk.CTkButton(row, text="−", width=32, height=30, command=minus).pack(side="right")
+            ctk.CTkButton(
+                row, text="−", width=32, height=30, font=_mono(13), command=minus
+            ).pack(side="right")
             self._values[key] = value
 
-        buttons = ctk.CTkFrame(side, fg_color="transparent")
+        buttons = ctk.CTkFrame(side, fg_color="transparent", border_width=0)
         buttons.pack(fill="x", padx=18, pady=(10, 0))
         ctk.CTkButton(
-            buttons, text="Reset", width=100, fg_color="transparent", border_width=1,
-            command=app.reset_tuning,
+            buttons, text="RESET", width=100, font=_mono(11), border_color=_LINE,
+            text_color=_MUTED, command=app.reset_tuning,
         ).pack(side="left", expand=True, fill="x", padx=(0, 5))
-        ctk.CTkButton(buttons, text="Save", width=100, command=app.save_tuning).pack(
-            side="left", expand=True, fill="x", padx=(5, 0)
-        )
+        ctk.CTkButton(
+            buttons, text="SAVE", width=100, font=_mono(11, bold=True), command=app.save_tuning
+        ).pack(side="left", expand=True, fill="x", padx=(5, 0))
 
         section("Gestures")
-        self._gestures = ctk.CTkScrollableFrame(side, fg_color="transparent", height=120)
+        self._gestures = ctk.CTkScrollableFrame(
+            side, fg_color="transparent", border_width=0, height=120
+        )
         self._gestures.pack(fill="both", expand=True, padx=8)
         self._gestures.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
-            side, text=_KEYS_HELP, justify="left", anchor="w", font=small, text_color=_MUTED
+            side, text=_KEYS_HELP, justify="left", anchor="w", font=_mono(10), text_color=_MUTED
         ).pack(fill="x", padx=18, pady=(4, 12))
 
     # --- per frame --------------------------------------------------------------
@@ -201,28 +260,31 @@ class ControlWindow:
             on = engine.face is not None if slot == FACE_SLOT else app.cfg.use_hand
             name = _SLOT_NAMES[slot]
             if not on or state is None:
-                self._set(mode, text=f"{name}  off", text_color=_MUTED)
+                self._set(mode, text=f"{name}   OFF", text_color=_MUTED)
                 self._set(detail, text="")
                 continue
-            # The dot marks whoever holds the cursor right now.
-            dot = " ●" if slot == engine.pointer_holder else ""
+            # The arrow marks whoever holds the cursor right now.
+            mark = "▸" if slot == engine.pointer_holder else " "
             idle = state.mode in ("NO HAND", "NO FACE")
             color = _MUTED if idle else (_GREEN if engine.enabled else _RED)
-            self._set(mode, text=f"{name}{dot}  {state.mode.lower()}", text_color=color)
+            self._set(mode, text=f"{name} {mark} {state.mode.upper()}", text_color=color)
             text = state.detail
             if state.cursor_source:
                 text = f"[{state.cursor_source}] {text}".rstrip()
             self._set(detail, text=text)
 
         if not engine.enabled:
-            text = "  PAUSED · MOUSE  " if app._mouse_paused else "  PAUSED  "
-            self._set(self._badge, text=text, fg_color=_RED, text_color="#111111")
+            self._badge_text(" PAUSED · MOUSE " if app._mouse_paused else " PAUSED ", _RED)
         elif app.cfg.dry_run:
-            self._set(self._badge, text="  DRY-RUN  ", fg_color=_AMBER, text_color="#111111")
+            self._badge_text(" DRY-RUN ", _AMBER)
         else:
-            self._set(self._badge, text="", fg_color="transparent")
-        self._set(self._fps, text=f"{fps:.0f} fps")
+            self._badge_text("", _PANEL)
+        self._set(self._fps, text=f"{fps:.0f} FPS")
         self._set(self._events, text="   ·   ".join(events[-3:]))
+
+    def _badge_text(self, text: str, color: str) -> None:
+        self._set(self._badge, text=text, text_color=color)
+        self._set(self._badge_box, border_color=color)
 
     def _update_controls(self) -> None:
         app, cfg, engine = self.app, self.app.cfg, self.app.engine
@@ -235,7 +297,7 @@ class ControlWindow:
         self._set_value("speed", f"{getattr(cfg, beta_key):g}")
         self._set_value("dead", f"{cfg.cursor_deadband:g}")
         target = engine.face.label if engine.face is not None else "hand"
-        self._set(self._tuning_for, text=f"tuning the {target} pointer")
+        self._set(self._tuning_for, text=f"TUNING ▸ {target.upper()} POINTER")
 
         key = (cfg.use_hand, engine.face.label if engine.face else None, engine.dominant)
         if key != self._gesture_key:
@@ -270,14 +332,14 @@ class ControlWindow:
         row = 0
         for title, pairs in self.app.gesture_sections():
             ctk.CTkLabel(
-                self._gestures, text=title, anchor="w", text_color=_GREY,
-                font=ctk.CTkFont(size=12, weight="bold"),
+                self._gestures, text=title.upper(), anchor="w", text_color=_MUTED,
+                font=_mono(10, bold=True),
             ).grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 2))
             row += 1
             for gesture, action in pairs:
                 ctk.CTkLabel(
                     self._gestures, text=gesture, anchor="w", height=18,
-                    font=ctk.CTkFont(size=12), text_color=_GREY,
+                    font=ctk.CTkFont(size=12), text_color=_MUTED,
                 ).grid(row=row, column=0, sticky="w", padx=(8, 6))
                 ctk.CTkLabel(
                     self._gestures, text=action, anchor="e", height=18,
