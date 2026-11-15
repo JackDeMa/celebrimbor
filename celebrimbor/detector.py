@@ -47,22 +47,62 @@ FACE_CONNECTIONS = [
 ]
 
 
-def ensure_model(
-    path: Path = DEFAULT_MODEL_PATH, url: str = MODEL_URL, name: str = "HandLandmarker"
-) -> Path:
-    """Return the model path, downloading the file if it is missing."""
+class ModelError(RuntimeError):
+    """A model file is missing and could not be downloaded."""
+
+
+def have_model(path: Path) -> bool:
     path = Path(path)
-    if path.exists() and path.stat().st_size > 0:
+    return path.is_file() and path.stat().st_size > 0
+
+
+def ensure_model(
+    path: Path = DEFAULT_MODEL_PATH,
+    url: str = MODEL_URL,
+    name: str = "hand",
+    progress=None,
+    timeout: float = 20.0,
+) -> Path:
+    """Return the model path, downloading the file if it is missing.
+
+    Frozen builds carry both models, so this only downloads in a source
+    checkout. `progress(done, total)` is called as bytes arrive (total is 0
+    when the server does not say). The file is written to a .part next to it
+    and renamed once complete: a broken download never leaves a bad model.
+    """
+    path = Path(path)
+    if have_model(path):
         return path
 
+    import http.client
     import urllib.request
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading the {name} model to {path} ...")
-    tmp = path.with_suffix(".part")
-    urllib.request.urlretrieve(url, tmp)
-    tmp.replace(path)
-    print("Model ready.")
+    print(f"Downloading the {name} model to {path} ...", flush=True)
+    tmp = path.with_name(path.name + ".part")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=timeout) as resp, open(tmp, "wb") as out:
+            total = int(resp.headers.get("Content-Length") or 0)
+            done = 0
+            while chunk := resp.read(64 * 1024):
+                out.write(chunk)
+                done += len(chunk)
+                if progress is not None:
+                    progress(done, total)
+        if done == 0 or (total and done != total):
+            raise OSError(f"incomplete download, {done} of {total or '?'} bytes")
+        tmp.replace(path)
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        reason = getattr(exc, "reason", None) or exc  # URLError hides the cause there
+        raise ModelError(
+            f"Cannot download the {name} model: {reason}\n"
+            f"Check the internet connection, or download\n  {url}\nand save it as\n  {path}"
+        ) from exc
+    print("Model ready.", flush=True)
     return path
 
 

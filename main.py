@@ -3,9 +3,11 @@
 import argparse
 import sys
 
+from celebrimbor import __version__
 from celebrimbor import bindings as bindings_mod
 from celebrimbor.app import CelebrimborApp
 from celebrimbor.config import Config
+from celebrimbor.detector import ModelError
 from celebrimbor.face_gestures import FACE_GESTURE_KINDS
 from celebrimbor.gestures import GESTURE_KINDS
 
@@ -14,14 +16,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="celebrimbor",
         description=(
-            "Control the mouse by moving your hand, your head or your eyes "
-            "in front of the webcam."
+            f"Celebrimbor {__version__}: control the mouse by moving your hand, "
+            "your head or your eyes in front of the webcam."
         ),
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument(
         "--config",
         default=None,
-        help=f"gesture file (default {bindings_mod.DEFAULT_PATH.name}, created if missing)",
+        help=(
+            f"gesture file (default {bindings_mod.FILE_NAME} next to the program, "
+            "or in the user settings folder if that is read-only; created if missing)"
+        ),
     )
     p.add_argument("--camera", type=int, default=None, help="webcam index (default 0)")
     p.add_argument(
@@ -85,7 +91,46 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="list the recognised gestures and the available actions, then exit",
     )
+    p.add_argument(
+        "--selftest",
+        action="store_true",
+        help="load both models and run them on a blank frame, then exit (no camera)",
+    )
     return p
+
+
+def selftest() -> int:
+    """Both landmarkers built from the shipped models and run once: proves a
+    build carries MediaPipe and the models intact. Never downloads."""
+    import numpy as np
+
+    from celebrimbor.detector import (
+        DEFAULT_FACE_MODEL_PATH,
+        DEFAULT_MODEL_PATH,
+        FaceDetector,
+        HandDetector,
+        have_model,
+    )
+
+    print(f"celebrimbor {__version__} selftest")
+    try:
+        for path in (DEFAULT_MODEL_PATH, DEFAULT_FACE_MODEL_PATH):
+            if not have_model(path):
+                raise FileNotFoundError(f"model missing: {path}")
+        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+        for cls, path in ((HandDetector, DEFAULT_MODEL_PATH),
+                          (FaceDetector, DEFAULT_FACE_MODEL_PATH)):
+            detector = cls(path)
+            try:
+                detector.detect(blank, 0)
+            finally:
+                detector.close()
+            print(f"  {cls.__name__:<14} OK  ({path.name})")
+    except Exception as exc:
+        print(f"selftest FAILED: {exc!r}")
+        return 1
+    print("OK")
+    return 0
 
 
 def _scale_face_ranges(cfg: Config, sensitivity: float) -> None:
@@ -175,6 +220,8 @@ def main() -> int:
     if a.list_gestures:
         print_reference()
         return 0
+    if a.selftest:
+        return selftest()
 
     cfg = Config()
     try:
@@ -190,7 +237,11 @@ def main() -> int:
     if not any(binds.values()):
         print("No gesture bound: check the \"bindings\" section.")
 
-    return CelebrimborApp(cfg, binds, config_path=a.config).run()
+    try:
+        return CelebrimborApp(cfg, binds, config_path=a.config).run()
+    except ModelError as exc:
+        print(exc)
+        return 1
 
 
 if __name__ == "__main__":

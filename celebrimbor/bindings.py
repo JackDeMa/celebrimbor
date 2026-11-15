@@ -11,9 +11,13 @@ The "face" section binds the face gestures (winks, mouth), used when the
 cursor follows the head or the eyes ("pointer" in settings).
 """
 
+import functools
 import json
+import os
 import re
+import shutil
 import sys
+import tempfile
 from dataclasses import fields
 from pathlib import Path
 
@@ -24,12 +28,51 @@ from .face_gestures import FACE_GESTURE_KINDS
 from .gestures import GESTURE_KINDS
 from .hand import HAND_SLOTS
 
-# Next to celebrimbor.exe when frozen, where the user can find and edit it.
-DEFAULT_PATH = (
-    Path(sys.executable).parent
-    if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent.parent
-) / "gestures.json"
+FILE_NAME = "gestures.json"
+
+
+def user_dir() -> Path:
+    """The per-user settings folder for when the program folder is read-only."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / "celebrimbor"
+
+
+def _writable(folder: Path) -> bool:
+    # os.access ignores Windows ACLs (Program Files): only a real file tells.
+    try:
+        with tempfile.TemporaryFile(dir=folder):
+            return True
+    except OSError:
+        return False
+
+
+@functools.cache
+def default_path() -> Path:
+    """Where gestures.json lives when --config does not say.
+
+    From source: the repository root. Frozen: next to the executable, where
+    the user can find and edit it, as long as it is there and the folder is
+    writable; otherwise in user_dir(), seeded with the shipped copy.
+    """
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parent.parent / FILE_NAME
+    local = Path(sys.executable).parent / FILE_NAME
+    if local.is_file() and _writable(local.parent):
+        return local
+    user = user_dir() / FILE_NAME
+    if not user.exists() and local.is_file():
+        try:
+            user.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(local, user)
+            print(f"{local.parent} is read-only: settings are kept in {user}")
+        except OSError:
+            return local  # usable, only saving will fail
+    return user
 
 DEFAULT_TEXT = """{
   // Celebrimbor gesture configuration.
@@ -254,8 +297,11 @@ def save_settings(path: Path | str | None, values: dict[str, float | bool]) -> P
     section. The result is parsed before it is written: a file this cannot
     edit safely is left alone.
     """
-    path = Path(path) if path else DEFAULT_PATH
-    text = path.read_text(encoding="utf-8")
+    path = Path(path) if path else default_path()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc.strerror or exc}") from exc
     for key, value in values.items():
         literal = json.dumps(value) if isinstance(value, bool) else f"{value:g}"
         # Only a line that starts with the key: a commented-out one stays as it is.
@@ -273,7 +319,10 @@ def save_settings(path: Path | str | None, values: dict[str, float | bool]) -> P
         json.loads(strip_comments(text))
     except json.JSONDecodeError as exc:
         raise ConfigError(f"{path}: could not update it safely ({exc.msg})") from exc
-    path.write_text(text, encoding="utf-8")
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"cannot save {path}: {exc.strerror or exc}") from exc
     return path
 
 
@@ -318,13 +367,18 @@ def load(
     The bindings come back one set per hand, with fresh Action objects on each
     side: several actions hold state and the two hands must not share it.
     """
-    path = Path(path) if path else DEFAULT_PATH
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(DEFAULT_TEXT, encoding="utf-8")
-        print(f"Created {path} with the default configuration.")
-
-    raw = strip_comments(path.read_text(encoding="utf-8"))
+    path = Path(path) if path else default_path()
+    try:
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(DEFAULT_TEXT, encoding="utf-8")
+            print(f"Created {path} with the default configuration.")
+        raw = strip_comments(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ConfigError(
+            f"cannot read or create {path}: {exc.strerror or exc} "
+            "(pass another file with --config)"
+        ) from exc
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:

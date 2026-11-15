@@ -3,16 +3,23 @@ from PyInstaller.utils.hooks import collect_data_files
 
 import os
 
-datas = [('models/hand_landmarker.task', 'models')]
-# The face model is only needed by the head / eye pointer: bundled when it has
-# been downloaded (run once with --pointer head), downloaded on demand otherwise.
-if os.path.exists('models/face_landmarker.task'):
-    datas.append(('models/face_landmarker.task', 'models'))
+# Both models go inside the build: the executable must start offline.
+MODELS = ['models/hand_landmarker.task', 'models/face_landmarker.task']
+missing = [m for m in MODELS if not os.path.isfile(m) or os.path.getsize(m) == 0]
+if missing:
+    raise SystemExit(
+        'Missing model files: ' + ', '.join(missing) + '\n'
+        'Start the app once (python main.py) to download them, '
+        'or fetch them as in .github/workflows/build.yml.'
+    )
+
+datas = [(m, 'models') for m in MODELS]
 datas += collect_data_files('mediapipe')
 # The window's themes and fonts are JSON / font files PyInstaller cannot see.
 datas += collect_data_files('customtkinter')
 
-
+# matplotlib and sounddevice cannot be excluded: mediapipe.tasks imports both
+# unconditionally (vision.drawing_utils, audio.core.audio_record).
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -28,6 +35,7 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# console=True: --list-gestures, --selftest and the --no-preview log print there.
 exe = EXE(
     pyz,
     a.scripts,
@@ -37,7 +45,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -50,7 +58,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='celebrimbor',
 )
