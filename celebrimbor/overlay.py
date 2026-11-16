@@ -19,7 +19,9 @@ were elevated by UAC (nor over the secure desktop).
 """
 
 import ctypes
+import math
 import sys
+import time
 import tkinter as tk
 
 if sys.platform == "win32":
@@ -44,6 +46,7 @@ _SWP_FRAMECHANGED = 0x0020
 _SPI_GETWORKAREA = 0x0030
 
 # Same palette as the preview HUD, written the way Tk wants it.
+_CYAN = "#00E5FF"
 _BG = "#070B10"
 _LINE = "#1C2E3B"
 _GREEN = "#3DFFA8"
@@ -62,6 +65,123 @@ def _work_area() -> tuple[int, int, int, int]:
         user32 = ctypes.windll.user32
         return 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
     return rect.left, rect.top, rect.right, rect.bottom
+
+
+def _click_through(root) -> int:
+    """Make a Tk toplevel topmost, click-through, unfocusable; return its hwnd."""
+    user32 = ctypes.windll.user32
+    # Tk wraps the toplevel in a frame window: the styles belong on the
+    # outer one, which is where GetParent lands.
+    hwnd = user32.GetParent(root.winfo_id()) or root.winfo_id()
+
+    get = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+    put = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+    get.restype = ctypes.c_ssize_t
+    get.argtypes = [wintypes.HWND, ctypes.c_int]
+    put.restype = ctypes.c_ssize_t
+    put.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+
+    style = get(hwnd, _GWL_EXSTYLE)
+    put(
+        hwnd,
+        _GWL_EXSTYLE,
+        style | _WS_EX_LAYERED | _WS_EX_TRANSPARENT | _WS_EX_NOACTIVATE | _WS_EX_TOOLWINDOW,
+    )
+    # Style changes only take hold once the window is told to reapply them.
+    user32.SetWindowPos(
+        hwnd,
+        _HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
+    )
+    return hwnd
+
+
+class CalibrationMark:
+    """A reticle in the middle of the screen, shown while the face calibrates.
+
+    The camera preview already has a progress bar, but the calibration asks you
+    to look at the centre of the *screen*: this is the thing to look at. Same
+    click-through window as the card, with a colour key for the background so
+    only the drawing is visible.
+    """
+
+    SIZE = 160
+    _KEY = "#010203"
+
+    def __init__(self, master=None):
+        self.root = tk.Toplevel(master) if master is not None else tk.Tk()
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.attributes("-transparentcolor", self._KEY)
+        self.root.configure(bg=self._KEY)
+        self.canvas = tk.Canvas(
+            self.root, width=self.SIZE, height=self.SIZE, bg=self._KEY, highlightthickness=0
+        )
+        self.canvas.pack()
+        user32 = ctypes.windll.user32
+        x = (user32.GetSystemMetrics(0) - self.SIZE) // 2
+        y = (user32.GetSystemMetrics(1) - self.SIZE) // 2
+        self.root.geometry(f"{self.SIZE}x{self.SIZE}+{x}+{y}")
+        self.root.update_idletasks()
+        self.hwnd = _click_through(self.root)
+        self.root.withdraw()
+        self.visible = False
+
+    def update(self, progress: float) -> None:
+        """progress: 0 = not calibrating (hidden), 0..1 = how far along it is."""
+        if progress <= 0.0:
+            if self.visible:
+                self.visible = False
+                self.root.withdraw()
+                self._pump()
+            return
+        if not self.visible:
+            self.visible = True
+            self.root.deiconify()
+            _click_through(self.root)
+
+        c, s = self.canvas, self.SIZE
+        m = s // 2
+        pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 5.0)
+        r = 34 + 8 * pulse
+        c.delete("all")
+        c.create_oval(m - r, m - r, m + r, m + r, outline=_CYAN, width=2)
+        c.create_arc(
+            m - 62, m - 62, m + 62, m + 62, start=90, extent=-360 * min(progress, 1.0),
+            style="arc", outline=_YELLOW, width=3,
+        )
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            c.create_line(m + dx * 44, m + dy * 44, m + dx * 62, m + dy * 62, fill=_CYAN, width=2)
+        c.create_oval(m - 5, m - 5, m + 5, m + 5, fill=_CYAN, outline="")
+        self.root.attributes("-topmost", True)
+        self._pump()
+
+    def _pump(self) -> None:
+        try:
+            self.root.update_idletasks()
+            self.root.update()
+        except tk.TclError:
+            pass
+
+    def close(self) -> None:
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+
+def create_mark(master=None) -> "CalibrationMark | None":
+    if sys.platform != "win32":
+        return None
+    try:
+        return CalibrationMark(master=master)
+    except Exception as exc:
+        print(f"Calibration mark unavailable ({exc}), carrying on without it.")
+        return None
 
 
 class Overlay:
@@ -128,38 +248,7 @@ class Overlay:
         self.root.geometry(f"{self.WIDTH}x{height}+{x}+{y}")
 
     def _apply_styles(self) -> None:
-        user32 = ctypes.windll.user32
-        # Tk wraps the toplevel in a frame window: the styles belong on the
-        # outer one, which is where GetParent lands.
-        self.hwnd = user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
-
-        get = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
-        put = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
-        get.restype = ctypes.c_ssize_t
-        get.argtypes = [wintypes.HWND, ctypes.c_int]
-        put.restype = ctypes.c_ssize_t
-        put.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
-
-        style = get(self.hwnd, _GWL_EXSTYLE)
-        put(
-            self.hwnd,
-            _GWL_EXSTYLE,
-            style
-            | _WS_EX_LAYERED
-            | _WS_EX_TRANSPARENT
-            | _WS_EX_NOACTIVATE
-            | _WS_EX_TOOLWINDOW,
-        )
-        # Style changes only take hold once the window is told to reapply them.
-        user32.SetWindowPos(
-            self.hwnd,
-            _HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
-        )
+        self.hwnd = _click_through(self.root)
 
     def raise_above(self) -> None:
         """Back on top of the other topmost windows."""

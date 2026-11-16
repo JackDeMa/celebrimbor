@@ -114,6 +114,7 @@ class CelebrimborApp:
         self.running = True
         self.show_skeleton = True
         self.overlay: overlay.Overlay | None = None
+        self.mark: overlay.CalibrationMark | None = None
         self.window = None
         self._fps = 0.0
         self._events: list[tuple[float, str]] = []
@@ -370,6 +371,10 @@ class CelebrimborApp:
             # A child of the window when there is one: one Tk per process.
             master = self.window.root if self.window is not None else None
             self.overlay = overlay.create(face=True, master=master)
+        # The thing to look at while the face calibrates, whatever the overlay.
+        self.mark = overlay.create_mark(
+            master=self.window.root if self.window is not None else None
+        )
         hotkeys = self._make_hotkeys()
         hotkeys.start()
         print(
@@ -433,6 +438,10 @@ class CelebrimborApp:
                 states = self.engine.update(feats, now, face_feats)
                 self._record(states, now)
 
+                if self.mark is not None:
+                    face_state = next((s for s in states if s.hand == FACE_SLOT), None)
+                    self.mark.update(face_state.calibration if face_state else 0.0)
+
                 if self.overlay is not None:
                     self.overlay.update(
                         states,
@@ -459,6 +468,8 @@ class CelebrimborApp:
             cap.release()
             if self.overlay is not None:
                 self.overlay.close()
+            if self.mark is not None:
+                self.mark.close()
             if self.window is not None:
                 self.window.close()
         return 0

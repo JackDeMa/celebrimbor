@@ -101,6 +101,14 @@ class ControlWindow:
         small = ctk.CTkFont(size=11)
         self._build_main(small)
         self._build_sidebar(small)
+        self._center()
+
+    def _center(self) -> None:
+        """Open in the middle of the screen, not wherever the system drops it."""
+        self.root.update_idletasks()
+        x = (self.root.winfo_screenwidth() - self.root.winfo_reqwidth()) // 2
+        y = (self.root.winfo_screenheight() - self.root.winfo_reqheight()) // 2
+        self.root.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
     # --- layout ---------------------------------------------------------------
     def _build_main(self, small) -> None:
